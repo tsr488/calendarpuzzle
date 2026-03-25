@@ -85,7 +85,7 @@ class App {
     try {
       await waitForOpenCV();
       this.cvReady = true;
-      this.statusEl.textContent = 'Ready. Tap Start Camera';
+      this.statusEl.textContent = 'Ready. Tap "Start Camera"';
     } catch {
       this.statusEl.textContent = 'OpenCV failed to load. Refresh to retry.';
     }
@@ -181,8 +181,6 @@ class App {
       // 3. Try solving with the default detection, then adjust threshold if needed.
       //    HARD RULE: occupied + solver solution = 41 cells exactly.
       
-      const targetSet = new Set(targetCells.map(([c, r]) => cellKey(c, r)));
-      
       let solution = null;
       let bestDetection = detection;
 
@@ -268,49 +266,16 @@ class App {
 
   /**
    * Try solving with available (unplaced) pieces.
-   * First tries all available pieces. If area doesn't match, tries subsets.
+   * Only attempts if total piece area exactly matches the empty cell count.
    */
   _trySolveWithAvailable(cells, available) {
     const cellCount = cells.length;
     if (cellCount === 0 || available.length === 0) return null;
 
-    // First try: use ALL available pieces (most likely correct)
     const totalArea = available.reduce((sum, p) => sum + p.coords.length, 0);
-    if (totalArea === cellCount) {
-      const solution = solvePuzzle(cells, available);
-      if (solution) return solution;
-    }
+    if (totalArea !== cellCount) return null;
 
-    // If piece detection missed some, try subsets of available pieces
-    for (let n = available.length - 1; n >= 1; n--) {
-      const combos = this._combinations(available, n);
-      for (const subset of combos) {
-        const subArea = subset.reduce((sum, p) => sum + p.coords.length, 0);
-        if (subArea !== cellCount) continue;
-        const solution = solvePuzzle(cells, subset);
-        if (solution) return solution;
-      }
-    }
-    return null;
-  }
-
-  /**
-   * Generate all combinations of k items from arr
-   */
-  _combinations(arr, k) {
-    if (k === 0) return [[]];
-    if (arr.length < k) return [];
-    const results = [];
-    const [first, ...rest] = arr;
-    // Include first
-    for (const combo of this._combinations(rest, k - 1)) {
-      results.push([first, ...combo]);
-    }
-    // Exclude first
-    for (const combo of this._combinations(rest, k)) {
-      results.push(combo);
-    }
-    return results;
+    return solvePuzzle(cells, available);
   }
 
   /**

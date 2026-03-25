@@ -26,7 +26,7 @@ export function detectBoard(photoCanvas) {
   try {
     const corners = findBoardCorners(src);
     if (!corners) {
-      throw new Error('Could not detect board. Make sure the full board is visible.');
+      throw new Error('Could not detect board. Make sure full board is visible.');
     }
     result.corners = corners;
 
