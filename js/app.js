@@ -11,6 +11,13 @@ class App {
     this.cvReady = false;
     this.solving = false;
     this.solveTomorrow = false;
+    // Hint state
+    this._solution = null;       // sorted solution placements
+    this._detection = null;      // detection result for redrawing
+    this._hintIndex = 0;         // how many pieces revealed so far
+    this._solveMonth = null;
+    this._solveDay = null;
+    this._photoImageData = null; // pristine photo for redrawing
   }
 
   _getTargetDate() {
@@ -53,6 +60,7 @@ class App {
     this.startBtn = document.getElementById('camera-start-btn');
     this.captureBtn = document.getElementById('camera-capture-btn');
     this.retakeBtn = document.getElementById('camera-retake-btn');
+    this.hintBtn = document.getElementById('hint-btn');
     this.resultCanvas = document.getElementById('result-canvas');
     this.photoCanvas = photoCanvas;
     this.debugCanvas = document.getElementById('debug-canvas');
@@ -60,6 +68,7 @@ class App {
     this.startBtn.addEventListener('click', () => this._startCamera());
     this.captureBtn.addEventListener('click', () => this._captureAndSolve());
     this.retakeBtn.addEventListener('click', () => this._retake());
+    this.hintBtn.addEventListener('click', () => this._showNextHint());
 
     // Long-press status to toggle debug view
     let pressTimer;
@@ -200,24 +209,44 @@ class App {
 
       const totalTime = (performance.now() - t0).toFixed(0);
 
+      // Save pristine photo for hint redraws
+      const pCtx = this.photoCanvas.getContext('2d');
+      this._photoImageData = pCtx.getImageData(0, 0, this.photoCanvas.width, this.photoCanvas.height);
+
       // Populate debug canvas (hidden until long-press on status)
       drawDebug(this.debugCanvas, this.photoCanvas, detection.corners, detection.occupied, detection.empty, detection.cellDebug);
+
+      // Draw occupied overlay (always, even without solution)
+      this._drawResultOverlay(detection, [], month, day);
 
       if (solution) {
         const solvedArea = solution.reduce((sum, p) => sum + p.cells.length, 0);
         const occOnTarget = targetCells.filter(([c, r]) => detection.occupied.has(cellKey(c, r))).length;
         const totalCovered = occOnTarget + solvedArea;
         if (totalCovered !== 41) {
-          this._drawResultOverlay(detection, [], month, day);
           this.statusEl.textContent = `Bad detection: ${occOnTarget}+${solvedArea}=${totalCovered}≠41 (${totalTime}ms)`;
         } else {
-          this._drawResultOverlay(detection, solution, month, day);
-          this.statusEl.textContent = `Solved! ${solution.length} pieces placed, ${8-solution.length} detected (${totalTime}ms)`;
+          // Sort solution pieces: upper-left first (by min row desc, then min col asc)
+          solution.sort((a, b) => {
+            const aMaxR = Math.max(...a.cells.map(([, r]) => r));
+            const bMaxR = Math.max(...b.cells.map(([, r]) => r));
+            if (aMaxR !== bMaxR) return bMaxR - aMaxR; // higher row = upper on board
+            const aMinC = Math.min(...a.cells.map(([c]) => c));
+            const bMinC = Math.min(...b.cells.map(([c]) => c));
+            return aMinC - bMinC;
+          });
+
+          // Store for hint mode
+          this._solution = solution;
+          this._detection = detection;
+          this._hintIndex = 0;
+          this._solveMonth = month;
+          this._solveDay = day;
+
+          this.hintBtn.classList.remove('hidden');
+          this.statusEl.textContent = `Solved! ${solution.length} pieces to place. Tap 💡 Hint (${totalTime}ms)`;
         }
       } else {
-        const occOnTarget = targetCells.filter(([c, r]) => detection.occupied.has(cellKey(c, r))).length;
-        const emptyCount = 41 - occOnTarget;
-        this._drawResultOverlay(detection, [], month, day);
         this.statusEl.textContent = `No solution found after ${offsets.length} threshold attempts (${totalTime}ms)`;
       }
     } catch (err) {
@@ -360,9 +389,36 @@ class App {
     }
   }
 
+  _showNextHint() {
+    if (!this._solution || this._hintIndex >= this._solution.length) return;
+
+    this._hintIndex++;
+
+    // Restore pristine photo
+    const pCtx = this.photoCanvas.getContext('2d');
+    pCtx.putImageData(this._photoImageData, 0, 0);
+
+    // Redraw occupied cells + revealed hints
+    const revealed = this._solution.slice(0, this._hintIndex);
+    this._drawResultOverlay(this._detection, revealed, this._solveMonth, this._solveDay);
+
+    const remaining = this._solution.length - this._hintIndex;
+    if (remaining > 0) {
+      this.statusEl.textContent = `Hint ${this._hintIndex}/${this._solution.length} — ${remaining} more`;
+    } else {
+      this.statusEl.textContent = `All ${this._solution.length} pieces revealed!`;
+      this.hintBtn.classList.add('hidden');
+    }
+  }
+
   _retake() {
     this.photoCanvas.classList.add('hidden');
+    this.hintBtn.classList.add('hidden');
     document.getElementById('debug-section').classList.add('hidden');
+    this._solution = null;
+    this._detection = null;
+    this._hintIndex = 0;
+    this._photoImageData = null;
     this._startCamera();
   }
 }

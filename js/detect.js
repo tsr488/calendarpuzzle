@@ -2,6 +2,7 @@
 // Pieces: two shades of blue with white connecting lines
 // Board: light natural wood
 import { BOARD_CELLS, BOARD_COLS, BOARD_ROWS, isBoardCell, cellKey, PIECES } from './board.js';
+import { solvePuzzle } from './solver.js';
 
 export function waitForOpenCV() {
   return new Promise((resolve, reject) => {
@@ -334,9 +335,11 @@ function findLargestGapThreshold(values) {
 
 /**
  * Identify placed pieces by grouping occupied cells into connected components
- * and matching against known piece shapes.
+ * and using the DLX solver to find which piece(s) exactly cover each group.
+ * Handles merged groups (e.g., two adjacent pieces = one 10-cell blob).
  */
 export function identifyPlacedPieces(occupied) {
+  // 1. Find connected components
   const visited = new Set();
   const components = [];
 
@@ -355,56 +358,59 @@ export function identifyPlacedPieces(occupied) {
         if (occupied.has(nk) && !visited.has(nk)) stack.push(nk);
       }
     }
-    components.push(component);
+    components.push(component.map(k => k.split(',').map(Number)));
   }
 
+  // 2. For each component, try to solve it with subsets of pieces
   const usedPieceIndices = new Set();
-  for (const comp of components) {
-    const coords = comp.map(k => k.split(',').map(Number));
-    const matchIdx = matchPieceShape(coords, usedPieceIndices);
-    if (matchIdx !== -1) usedPieceIndices.add(matchIdx);
+
+  for (const coords of components) {
+    const size = coords.length;
+    if (size < 5) continue; // smaller than any piece, skip (noise)
+
+    // Try all piece subsets whose area matches this component
+    const available = PIECES.filter((_, i) => !usedPieceIndices.has(i));
+    const result = solveComponent(coords, available, size);
+    if (result) {
+      for (const idx of result) usedPieceIndices.add(idx);
+    }
   }
+
   return usedPieceIndices;
 }
 
-function matchPieceShape(coords, excludeIndices) {
-  const norm = normalizeCoords(coords);
-  const key = coordsKey(norm);
+/**
+ * Try to find which pieces exactly cover a connected region.
+ * Returns array of PIECES indices, or null if no exact cover found.
+ */
+function solveComponent(cells, available, targetSize) {
+  // Try 1 piece, then 2, then 3 (unlikely to have 3+ adjacent)
+  for (let n = 1; n <= Math.min(3, available.length); n++) {
+    const combos = combinations(available, n);
+    for (const subset of combos) {
+      const totalArea = subset.reduce((sum, p) => sum + p.coords.length, 0);
+      if (totalArea !== targetSize) continue;
 
-  for (let i = 0; i < PIECES.length; i++) {
-    if (excludeIndices.has(i)) continue;
-    const orientations = generateAllOrientations(PIECES[i].coords);
-    for (const orient of orientations) {
-      if (coordsKey(orient) === key) return i;
+      const solution = solvePuzzle(cells, subset);
+      if (solution) {
+        // Return the PIECES indices of the matched pieces
+        return subset.map(p => PIECES.indexOf(p));
+      }
     }
   }
-  return -1;
+  return null;
 }
 
-function normalizeCoords(coords) {
-  const minC = Math.min(...coords.map(([c]) => c));
-  const minR = Math.min(...coords.map(([, r]) => r));
-  const norm = coords.map(([c, r]) => [c - minC, r - minR]);
-  norm.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
-  return norm;
-}
-
-function coordsKey(coords) {
-  return coords.map(([c, r]) => `${c},${r}`).join('|');
-}
-
-function generateAllOrientations(coords) {
+function combinations(arr, k) {
+  if (k === 0) return [[]];
+  if (arr.length < k) return [];
   const results = [];
-  const seen = new Set();
-  let current = coords.map(([c, r]) => [c, r]);
-  for (let flip = 0; flip < 2; flip++) {
-    for (let rot = 0; rot < 4; rot++) {
-      const norm = normalizeCoords(current);
-      const k = coordsKey(norm);
-      if (!seen.has(k)) { seen.add(k); results.push(norm); }
-      current = current.map(([c, r]) => [-r, c]);
-    }
-    current = coords.map(([c, r]) => [-c, r]);
+  const [first, ...rest] = arr;
+  for (const combo of combinations(rest, k - 1)) {
+    results.push([first, ...combo]);
+  }
+  for (const combo of combinations(rest, k)) {
+    results.push(combo);
   }
   return results;
 }
