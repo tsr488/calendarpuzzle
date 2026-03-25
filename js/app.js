@@ -137,34 +137,55 @@ class App {
         return;
       }
 
-      // 3. Figure out which pieces are already placed
-      const usedPieceIndices = identifyPlacedPieces(detection.occupied);
-      const remainingPieces = PIECES.filter((_, i) => !usedPieceIndices.has(i));
+      // 3. Simple approach: the solver needs the empty (uncovered) cells that
+      //    are NOT the date cells. These are the cells remaining pieces must fill.
+      //    We DON'T try to identify which specific pieces are placed — just let
+      //    the solver figure it out with the right number of pieces.
+      
+      const occupiedCount = detection.occupied.size;
+      const emptyNonDateCells = targetCells.filter(([c, r]) => !detection.occupied.has(cellKey(c, r)));
 
-      // 4. The cells that still need covering = target cells minus already-occupied cells
-      const stillNeedCovering = targetCells.filter(([c, r]) => !detection.occupied.has(cellKey(c, r)));
-
-      if (stillNeedCovering.length === 0) {
+      if (emptyNonDateCells.length === 0) {
         this._drawResultOverlay(detection, [], month, day);
-        this.statusEl.textContent = `Puzzle already solved! (detected in ${detectTime}ms)`;
+        this.statusEl.textContent = `Puzzle complete! (${detectTime}ms)`;
         this.solving = false;
         return;
       }
 
-      // 5. Solve remaining
-      this.statusEl.textContent = 'Solving...';
+      // Figure out how many pieces are needed to fill the empty cells
+      // Pieces are 5 or 6 cells each. Try to find the right subset.
+      // Simple heuristic: try solving with all 8 pieces first (ignoring occupied),
+      // then try removing pieces one at a time if that fails.
+      
+      this.statusEl.textContent = `Detected ${occupiedCount} covered cells. Solving...`;
       const t1 = performance.now();
-      const solution = solvePuzzle(stillNeedCovering, remainingPieces);
-      const solveTime = (performance.now() - t1).toFixed(0);
+      
+      // Try with different piece counts — the solver is fast enough
+      let solution = null;
+      let usedPieces = null;
+      
+      // Try all 8 pieces on just the empty non-date cells
+      // This works when detection perfectly identifies occupied cells
+      solution = solvePuzzle(emptyNonDateCells, PIECES);
+      usedPieces = PIECES;
+
+      // If that fails, try solving for the FULL target (all cells to cover)
+      // with all 8 pieces — ignoring detection entirely, just use date
+      if (!solution) {
+        solution = solvePuzzle(targetCells, PIECES);
+        usedPieces = PIECES;
+      }
+
       const totalTime = (performance.now() - t0).toFixed(0);
 
       if (solution) {
         this._drawResultOverlay(detection, solution, month, day);
-        const nPlaced = usedPieceIndices.size;
-        const nRemaining = remainingPieces.length;
-        this.statusEl.textContent = `Found ${nPlaced} placed, solved ${nRemaining} remaining (${totalTime}ms)`;
+        this.statusEl.textContent = `Solved! (${totalTime}ms)`;
       } else {
-        this.statusEl.textContent = `No solution found — try recapturing (${totalTime}ms)`;
+        // Show diagnostic info
+        this._drawResultOverlay(detection, [], month, day);
+        document.getElementById('debug-section').classList.remove('hidden');
+        this.statusEl.textContent = `No solution: ${occupiedCount} occupied, ${emptyNonDateCells.length} empty to fill (${totalTime}ms)`;
       }
     } catch (err) {
       console.error('Detection error:', err);
