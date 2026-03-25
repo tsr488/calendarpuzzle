@@ -164,11 +164,7 @@ function warpToGrid(src, corners, dstW, dstH) {
  * Classify cells as occupied (piece) or empty (wood).
  * 
  * The puzzle has BLUE pieces on LIGHT WOOD.
- * Key signals:
- * - HSV Saturation: blue pieces have much higher saturation than bare wood
- * - HSV Hue: blue pieces cluster around hue 90-130 (OpenCV scale 0-180)
- * - Wood is warm/low-saturation (hue ~15-30, low sat)
- * - White connecting lines on pieces add some noise but cells are mostly blue
+ * Returns per-cell confidence scores so the solver can try flipping borderline cells.
  */
 function classifyCells(warped, cellPx, result) {
   const hsv = new cv.Mat();
@@ -215,34 +211,37 @@ function classifyCells(warped, cellPx, result) {
     hMean.delete(); hStd.delete(); sMean.delete(); sStd.delete(); vMean.delete(); vStd.delete();
   }
 
-  // Adaptive classification using K-means-like split on saturation
-  // Blue pieces have significantly higher saturation than wood
+  // Adaptive classification using Otsu split on saturation
   const sats = cellStats.map(s => s.sat);
   const satThreshold = findOtsuThreshold(sats);
 
-  // Also look at hue: blue is roughly 85-135 in OpenCV HSV (0-180 scale)
-  // Wood/empty is more like 10-35 (warm/yellow tones)
+  // Compute a confidence score for each cell: positive = occupied, negative = empty
+  // Higher magnitude = more confident
+  result.cellScores = [];
+
   for (const stats of cellStats) {
     const key = cellKey(stats.col, stats.row);
 
-    // Primary signal: saturation
-    const highSat = stats.sat > Math.max(satThreshold, 30);
-    // Secondary signal: hue in blue range (broad range to catch light & dark blue)
-    const blueHue = stats.hue > 80 && stats.hue < 140;
-    // Tertiary: wood tends to have hue < 40 and very low saturation
-    const looksWoody = stats.hue < 45 && stats.sat < 50;
+    // Score based on saturation distance from threshold
+    const satScore = (stats.sat - Math.max(satThreshold, 30)) / 30;
+    // Bonus for being in blue hue range
+    const hueBonus = (stats.hue > 80 && stats.hue < 140) ? 0.5 : -0.3;
+    // Penalty for looking woody
+    const woodyPenalty = (stats.hue < 45 && stats.sat < 50) ? -1.0 : 0;
 
-    if (looksWoody) {
-      result.empty.add(key);
-    } else if (highSat && blueHue) {
-      result.occupied.add(key);
-    } else if (highSat) {
-      // High saturation but not clearly blue — still likely a piece
+    const score = satScore + hueBonus + woodyPenalty;
+
+    result.cellScores.push({ col: stats.col, row: stats.row, score, key });
+
+    if (score > 0) {
       result.occupied.add(key);
     } else {
       result.empty.add(key);
     }
   }
+
+  // Sort by absolute score so borderline cells come first
+  result.cellScores.sort((a, b) => Math.abs(a.score) - Math.abs(b.score));
 
   hsv.delete(); rgb.delete();
 }

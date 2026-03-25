@@ -125,7 +125,7 @@ class App {
     drawDebug(this.debugCanvas, this.photoCanvas, detection.corners, detection.occupied, detection.empty);
 
     try {
-      // 2. Use today's date to know which 2 cells SHOULD be empty
+      // 2. Use today's date
       const today = new Date();
       const month = today.getMonth() + 1;
       const day = today.getDate();
@@ -137,12 +137,20 @@ class App {
         return;
       }
 
-      // 3. Simple approach: the solver needs the empty (uncovered) cells that
-      //    are NOT the date cells. These are the cells remaining pieces must fill.
-      //    We DON'T try to identify which specific pieces are placed — just let
-      //    the solver figure it out with the right number of pieces.
+      // 3. At least 1 piece is placed. The empty non-date cells need to be
+      //    filled by the remaining (unplaced) pieces.
+      //    Total piece area = 5*7 + 6*1 = 41 cells. Board has 43 cells, minus 2 date = 41.
+      //    So occupied cells = placed piece area, empty non-date = remaining piece area.
       
+      // Estimate how many pieces are placed from occupied cell count
       const occupiedCount = detection.occupied.size;
+      // Each piece covers ~5.125 cells on average (7×5 + 1×6 = 41 total across 8 pieces)
+      // Rough estimate of placed pieces
+      const estPlaced = Math.round(occupiedCount / 5.125);
+      const estRemaining = Math.max(1, 8 - estPlaced);
+      
+      // Get empty cells that aren't date cells (these need to be covered)
+      const targetSet = new Set(targetCells.map(([c, r]) => cellKey(c, r)));
       const emptyNonDateCells = targetCells.filter(([c, r]) => !detection.occupied.has(cellKey(c, r)));
 
       if (emptyNonDateCells.length === 0) {
@@ -152,28 +160,45 @@ class App {
         return;
       }
 
-      // Figure out how many pieces are needed to fill the empty cells
-      // Pieces are 5 or 6 cells each. Try to find the right subset.
-      // Simple heuristic: try solving with all 8 pieces first (ignoring occupied),
-      // then try removing pieces one at a time if that fails.
-      
-      this.statusEl.textContent = `Detected ${occupiedCount} covered cells. Solving...`;
+      this.statusEl.textContent = `${occupiedCount} covered, ~${estRemaining} pieces left. Solving...`;
       const t1 = performance.now();
       
-      // Try with different piece counts — the solver is fast enough
-      let solution = null;
-      let usedPieces = null;
+      // Try solving with the detected empty region
+      // Use subsets of pieces by size to match the cell count
+      let solution = this._trySolveWithPieceSubsets(emptyNonDateCells, estRemaining);
       
-      // Try all 8 pieces on just the empty non-date cells
-      // This works when detection perfectly identifies occupied cells
-      solution = solvePuzzle(emptyNonDateCells, PIECES);
-      usedPieces = PIECES;
-
-      // If that fails, try solving for the FULL target (all cells to cover)
-      // with all 8 pieces — ignoring detection entirely, just use date
-      if (!solution) {
-        solution = solvePuzzle(targetCells, PIECES);
-        usedPieces = PIECES;
+      // If that fails, try flipping the most borderline cells
+      if (!solution && detection.cellScores) {
+        const borderline = detection.cellScores
+          .filter(cs => targetSet.has(cs.key))
+          .slice(0, 6); // up to 6 most borderline cells
+        
+        // Try flipping 1 borderline cell at a time
+        for (let i = 0; i < borderline.length && !solution; i++) {
+          const flipped = new Set(detection.occupied);
+          const cs = borderline[i];
+          if (flipped.has(cs.key)) { flipped.delete(cs.key); } else { flipped.add(cs.key); }
+          
+          const altEmpty = targetCells.filter(([c, r]) => !flipped.has(cellKey(c, r)));
+          const altEstPlaced = Math.round(flipped.size / 5.125);
+          const altEstRemaining = Math.max(1, 8 - altEstPlaced);
+          solution = this._trySolveWithPieceSubsets(altEmpty, altEstRemaining);
+        }
+        
+        // Try flipping 2 borderline cells
+        for (let i = 0; i < borderline.length && !solution; i++) {
+          for (let j = i + 1; j < borderline.length && !solution; j++) {
+            const flipped = new Set(detection.occupied);
+            for (const idx of [i, j]) {
+              const cs = borderline[idx];
+              if (flipped.has(cs.key)) { flipped.delete(cs.key); } else { flipped.add(cs.key); }
+            }
+            const altEmpty = targetCells.filter(([c, r]) => !flipped.has(cellKey(c, r)));
+            const altEstPlaced = Math.round(flipped.size / 5.125);
+            const altEstRemaining = Math.max(1, 8 - altEstPlaced);
+            solution = this._trySolveWithPieceSubsets(altEmpty, altEstRemaining);
+          }
+        }
       }
 
       const totalTime = (performance.now() - t0).toFixed(0);
@@ -182,10 +207,9 @@ class App {
         this._drawResultOverlay(detection, solution, month, day);
         this.statusEl.textContent = `Solved! (${totalTime}ms)`;
       } else {
-        // Show diagnostic info
         this._drawResultOverlay(detection, [], month, day);
         document.getElementById('debug-section').classList.remove('hidden');
-        this.statusEl.textContent = `No solution: ${occupiedCount} occupied, ${emptyNonDateCells.length} empty to fill (${totalTime}ms)`;
+        this.statusEl.textContent = `No solution: ${occupiedCount} occ, ${emptyNonDateCells.length} empty (${totalTime}ms)`;
       }
     } catch (err) {
       console.error('Detection error:', err);
@@ -193,6 +217,54 @@ class App {
     }
 
     this.solving = false;
+  }
+
+  /**
+   * Try solving a region with different subsets of pieces.
+   * The cell count must match the total area of the piece subset.
+   * @param {number[][]} cells - cells to cover
+   * @param {number} estPieceCount - estimated number of pieces to use
+   * @returns {object[]|null}
+   */
+  _trySolveWithPieceSubsets(cells, estPieceCount) {
+    const cellCount = cells.length;
+    if (cellCount === 0) return null;
+
+    // Piece sizes: 7 are size 5, 1 is size 6 (the P piece at index 7)
+    // Try exact piece count first, then +/- 1
+    for (const n of [estPieceCount, estPieceCount - 1, estPieceCount + 1]) {
+      if (n < 1 || n > 8) continue;
+
+      // Generate all combinations of n pieces from 8
+      const combos = this._combinations(PIECES, n);
+      for (const subset of combos) {
+        const totalArea = subset.reduce((sum, p) => sum + p.coords.length, 0);
+        if (totalArea !== cellCount) continue;
+
+        const solution = solvePuzzle(cells, subset);
+        if (solution) return solution;
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Generate all combinations of k items from arr
+   */
+  _combinations(arr, k) {
+    if (k === 0) return [[]];
+    if (arr.length < k) return [];
+    const results = [];
+    const [first, ...rest] = arr;
+    // Include first
+    for (const combo of this._combinations(rest, k - 1)) {
+      results.push([first, ...combo]);
+    }
+    // Exclude first
+    for (const combo of this._combinations(rest, k)) {
+      results.push(combo);
+    }
+    return results;
   }
 
   /**
