@@ -15,19 +15,58 @@
   <h1>📅 Calendar Puzzle</h1>
   <p class="subtitle">Daily polyomino challenge solver</p>
 
-  <div class="controls">
-    <select id="month-select" aria-label="Month"></select>
-    <select id="day-select" aria-label="Day"></select>
-    <button id="today-btn" class="btn-secondary">Today</button>
-    <button id="solve-btn">Solve</button>
+  <!-- Tab bar -->
+  <div class="tab-bar">
+    <button class="tab active" data-tab="quick-solve">Quick Solve</button>
+    <button class="tab" data-tab="camera-assist">Camera Assist</button>
   </div>
 
-  <canvas id="puzzle-canvas"></canvas>
+  <!-- Quick Solve view (existing functionality) -->
+  <div id="quick-solve" class="view active">
+    <div class="controls">
+      <select id="month-select" aria-label="Month"></select>
+      <select id="day-select" aria-label="Day"></select>
+      <button id="today-btn" class="btn-secondary">Today</button>
+      <button id="solve-btn">Solve</button>
+    </div>
+    <canvas id="puzzle-canvas"></canvas>
+    <div id="status"></div>
+    <div id="legend" class="legend"></div>
+  </div>
 
-  <div id="status"></div>
+  <!-- Camera Assist view -->
+  <div id="camera-assist" class="view">
+    <div class="camera-section">
+      <video id="camera-video" playsinline autoplay muted></video>
+      <div class="camera-controls">
+        <button id="camera-start-btn">📷 Start Camera</button>
+        <button id="camera-capture-btn" disabled>Capture</button>
+        <button id="camera-stop-btn" class="btn-secondary" disabled>Stop</button>
+      </div>
+    </div>
 
-  <div id="legend" class="legend"></div>
+    <canvas id="photo-canvas" class="hidden"></canvas>
+
+    <div id="grid-overlay-section" class="hidden">
+      <p class="section-label">Tap cells to mark placed pieces:</p>
+      <div class="color-picker">
+        <!-- Piece color buttons injected by JS -->
+      </div>
+      <canvas id="grid-overlay"></canvas>
+      <div class="overlay-controls">
+        <button id="overlay-solve-btn">Solve Remaining</button>
+        <button id="overlay-reset-btn" class="btn-secondary">Reset Marks</button>
+      </div>
+    </div>
+
+    <div id="camera-status"></div>
+  </div>
 
   <script type="module" src="js/app.js"></script>
+  <script>
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('./sw.js').catch(() => {});
+    }
+  </script>
 </body>
 </html>
