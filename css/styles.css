@@ -25,8 +25,29 @@ body {
 h1 {
   font-size: 1.4rem;
   font-weight: 700;
-  margin-bottom: 12px;
+  margin: 0;
   text-align: center;
+}
+
+.top-bar {
+  width: 100%;
+  max-width: 400px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  margin-bottom: 12px;
+}
+
+.version-label {
+  position: absolute;
+  right: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 0.65rem;
+  color: var(--text-muted);
+  opacity: 0.6;
+  font-variant-numeric: tabular-nums;
 }
 
 button {

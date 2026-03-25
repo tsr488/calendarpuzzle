@@ -1,5 +1,5 @@
-// Service Worker — cache-first strategy for offline PWA support
-const CACHE_NAME = 'calpuzzle-v2';
+// Service Worker — stale-while-revalidate for instant loads + fresh updates
+const CACHE_NAME = 'calpuzzle-v0.3.0';
 const ASSETS = [
   './',
   './index.html',
@@ -7,6 +7,7 @@ const ASSETS = [
   './icon-192.png',
   './icon-512.png',
   './css/styles.css',
+  './js/version.js',
   './js/app.js',
   './js/board.js',
   './js/dlx.js',
@@ -31,8 +32,16 @@ self.addEventListener('activate', (event) => {
   self.clients.claim();
 });
 
+// Stale-while-revalidate: serve from cache immediately, fetch update in background
 self.addEventListener('fetch', (event) => {
   event.respondWith(
-    caches.match(event.request).then((cached) => cached || fetch(event.request))
+    caches.open(CACHE_NAME).then(async (cache) => {
+      const cached = await cache.match(event.request);
+      const fetchPromise = fetch(event.request).then((response) => {
+        if (response.ok) cache.put(event.request, response.clone());
+        return response;
+      }).catch(() => cached);
+      return cached || fetchPromise;
+    })
   );
 });

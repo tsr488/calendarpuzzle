@@ -1,8 +1,9 @@
-﻿// Main application — camera capture → auto-detect → solve → overlay
+// Main application — camera capture → auto-detect → solve → overlay
 import { PIECES, BOARD_CELLS, getCellsToCover, cellKey, BOARD_COLS, BOARD_ROWS, getCellLabel } from './board.js';
 import { solvePuzzle } from './solver.js';
 import { Camera } from './camera.js';
 import { waitForOpenCV, detectBoard, identifyPlacedPieces, drawDebug } from './detect.js';
+import { APP_VERSION } from './version.js';
 
 class App {
   constructor() {
@@ -12,6 +13,9 @@ class App {
   }
 
   async init() {
+    // Version display
+    document.getElementById('version-label').textContent = 'v' + APP_VERSION;
+
     const videoEl = document.getElementById('camera-video');
     const photoCanvas = document.getElementById('photo-canvas');
     this.camera = new Camera(videoEl, photoCanvas);
