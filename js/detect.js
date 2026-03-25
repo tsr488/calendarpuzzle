@@ -177,61 +177,84 @@ function classifyCells(warped, cellPx, result) {
   for (const [c, r] of BOARD_CELLS) {
     const x = c * cellPx;
     const y = (BOARD_ROWS - 1 - r) * cellPx;
-    const margin = Math.floor(cellPx * 0.2);
+    const margin = Math.floor(cellPx * 0.25);
     const roi = new cv.Rect(x + margin, y + margin, cellPx - margin * 2, cellPx - margin * 2);
 
     const hsvRoi = hsv.roi(roi);
+    const rgbRoi = rgb.roi(roi);
 
-    // Split channels
-    const channels = new cv.MatVector();
-    cv.split(hsvRoi, channels);
-    const hCh = channels.get(0);
-    const sCh = channels.get(1);
-    const vCh = channels.get(2);
-
-    // Get mean and stddev of each channel
+    // HSV channels
+    const hsvChannels = new cv.MatVector();
+    cv.split(hsvRoi, hsvChannels);
     const hMean = new cv.Mat(), hStd = new cv.Mat();
     const sMean = new cv.Mat(), sStd = new cv.Mat();
-    const vMean = new cv.Mat(), vStd = new cv.Mat();
-    cv.meanStdDev(hCh, hMean, hStd);
-    cv.meanStdDev(sCh, sMean, sStd);
-    cv.meanStdDev(vCh, vMean, vStd);
+    cv.meanStdDev(hsvChannels.get(0), hMean, hStd);
+    cv.meanStdDev(hsvChannels.get(1), sMean, sStd);
+
+    // RGB channels — blue ratio is the key signal
+    const rgbChannels = new cv.MatVector();
+    cv.split(rgbRoi, rgbChannels);
+    const rMean = new cv.Mat(), gMean = new cv.Mat(), bMean = new cv.Mat();
+    const rStd = new cv.Mat(), gStd = new cv.Mat(), bStd = new cv.Mat();
+    cv.meanStdDev(rgbChannels.get(0), rMean, rStd);
+    cv.meanStdDev(rgbChannels.get(1), gMean, gStd);
+    cv.meanStdDev(rgbChannels.get(2), bMean, bStd);
+
+    const R = rMean.doubleAt(0, 0);
+    const G = gMean.doubleAt(0, 0);
+    const B = bMean.doubleAt(0, 0);
+    const total = R + G + B + 1; // +1 to avoid div by zero
 
     cellStats.push({
       col: c, row: r,
       hue: hMean.doubleAt(0, 0),
       sat: sMean.doubleAt(0, 0),
-      val: vMean.doubleAt(0, 0),
-      satStd: sStd.doubleAt(0, 0),
-      hueStd: hStd.doubleAt(0, 0),
+      R, G, B,
+      blueRatio: B / total,       // high for blue pieces
+      warmRatio: R / total,        // high for wood
+      blueDominance: B - R,        // positive = blue piece, negative = wood
     });
 
-    hsvRoi.delete();
-    hCh.delete(); sCh.delete(); vCh.delete(); channels.delete();
-    hMean.delete(); hStd.delete(); sMean.delete(); sStd.delete(); vMean.delete(); vStd.delete();
+    hsvRoi.delete(); rgbRoi.delete();
+    hsvChannels.get(0).delete(); hsvChannels.get(1).delete(); hsvChannels.get(2).delete(); hsvChannels.delete();
+    rgbChannels.get(0).delete(); rgbChannels.get(1).delete(); rgbChannels.get(2).delete(); rgbChannels.delete();
+    hMean.delete(); hStd.delete(); sMean.delete(); sStd.delete();
+    rMean.delete(); gMean.delete(); bMean.delete(); rStd.delete(); gStd.delete(); bStd.delete();
   }
 
-  // Adaptive classification using Otsu split on saturation
+  // Use blue dominance (B - R) as primary signal with Otsu split
+  const blueDoms = cellStats.map(s => s.blueDominance);
+  const blueThreshold = findOtsuThreshold(blueDoms);
+
+  // Also compute saturation threshold as secondary signal
   const sats = cellStats.map(s => s.sat);
   const satThreshold = findOtsuThreshold(sats);
 
-  // Compute a confidence score for each cell: positive = occupied, negative = empty
-  // Higher magnitude = more confident
   result.cellScores = [];
+  result.cellDebug = []; // detailed per-cell debug info
 
   for (const stats of cellStats) {
     const key = cellKey(stats.col, stats.row);
 
-    // Score based on saturation distance from threshold
-    const satScore = (stats.sat - Math.max(satThreshold, 30)) / 30;
-    // Bonus for being in blue hue range
-    const hueBonus = (stats.hue > 80 && stats.hue < 140) ? 0.5 : -0.3;
-    // Penalty for looking woody
-    const woodyPenalty = (stats.hue < 45 && stats.sat < 50) ? -1.0 : 0;
+    // Primary: blue dominance (B - R) relative to threshold
+    const blueScore = (stats.blueDominance - blueThreshold) / 40;
+    // Secondary: saturation
+    const satScore = (stats.sat - Math.max(satThreshold, 25)) / 50;
+    // Blue hue confirmation
+    const hueBonus = (stats.hue > 80 && stats.hue < 140) ? 0.3 : -0.2;
+    // Strong woody penalty
+    const woodyPenalty = (stats.blueDominance < -30 && stats.sat < 40) ? -1.5 : 0;
 
-    const score = satScore + hueBonus + woodyPenalty;
+    const score = blueScore * 0.6 + satScore * 0.3 + hueBonus * 0.1 + woodyPenalty;
 
     result.cellScores.push({ col: stats.col, row: stats.row, score, key });
+    result.cellDebug.push({
+      col: stats.col, row: stats.row, key,
+      R: Math.round(stats.R), G: Math.round(stats.G), B: Math.round(stats.B),
+      sat: Math.round(stats.sat), hue: Math.round(stats.hue),
+      bd: Math.round(stats.blueDominance), score: score.toFixed(2),
+      cls: score > 0 ? 'P' : 'W', // P=piece, W=wood
+    });
 
     if (score > 0) {
       result.occupied.add(key);
@@ -345,9 +368,9 @@ function generateAllOrientations(coords) {
 }
 
 /**
- * Draw debug visualization — board corners + cell classification
+ * Draw debug visualization — board corners + per-cell classification grid
  */
-export function drawDebug(debugCanvas, photoCanvas, corners, occupied, empty) {
+export function drawDebug(debugCanvas, photoCanvas, corners, occupied, empty, cellDebug) {
   const ctx = debugCanvas.getContext('2d');
   const dpr = window.devicePixelRatio || 1;
   debugCanvas.width = photoCanvas.width;
@@ -380,8 +403,73 @@ export function drawDebug(debugCanvas, photoCanvas, corners, occupied, empty) {
 
   // Show classification counts
   ctx.fillStyle = 'rgba(0,0,0,0.7)';
-  ctx.fillRect(0, 0, 250, 30);
+  ctx.fillRect(0, 0, 300, 30);
   ctx.fillStyle = '#0f0';
   ctx.font = '14px monospace';
   ctx.fillText(`occupied: ${occupied.size}  empty: ${empty.size}`, 10, 20);
+
+  // Draw per-cell debug grid below the photo
+  if (cellDebug && cellDebug.length > 0) {
+    const gridTop = (photoCanvas.height / dpr) + 10;
+    const cellW = 48, cellH = 36;
+    const gridW = BOARD_COLS * cellW + 20;
+    const gridH = BOARD_ROWS * cellH + 20;
+    
+    // Expand canvas to fit grid
+    const totalH = photoCanvas.height + (gridH + 20) * dpr;
+    debugCanvas.height = totalH;
+    debugCanvas.style.height = (totalH / dpr) + 'px';
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.drawImage(photoCanvas, 0, 0, photoCanvas.width / dpr, photoCanvas.height / dpr);
+
+    // Redraw corners on expanded canvas
+    if (corners) {
+      ctx.strokeStyle = '#0f0';
+      ctx.lineWidth = 4;
+      ctx.beginPath();
+      ctx.moveTo(corners[0][0], corners[0][1]);
+      for (let i = 1; i < 4; i++) ctx.lineTo(corners[i][0], corners[i][1]);
+      ctx.closePath();
+      ctx.stroke();
+    }
+    ctx.fillStyle = 'rgba(0,0,0,0.7)';
+    ctx.fillRect(0, 0, 300, 30);
+    ctx.fillStyle = '#0f0';
+    ctx.font = '14px monospace';
+    ctx.fillText(`occupied: ${occupied.size}  empty: ${empty.size}`, 10, 20);
+
+    // Grid background
+    ctx.fillStyle = '#1a1a2e';
+    ctx.fillRect(0, gridTop, gridW, gridH);
+
+    // Title
+    ctx.fillStyle = '#fff';
+    ctx.font = 'bold 12px monospace';
+    ctx.fillText('Cell Classification (P=piece, W=wood, bd=B-R)', 10, gridTop + 14);
+
+    for (const cd of cellDebug) {
+      const gx = 10 + cd.col * cellW;
+      const gy = gridTop + 20 + (BOARD_ROWS - 1 - cd.row) * cellH;
+
+      // Background color: green=piece, tan=wood
+      ctx.fillStyle = cd.cls === 'P' ? 'rgba(0,100,255,0.4)' : 'rgba(200,180,140,0.4)';
+      ctx.fillRect(gx, gy, cellW - 2, cellH - 2);
+      ctx.strokeStyle = '#555';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(gx, gy, cellW - 2, cellH - 2);
+
+      // Cell label + classification
+      ctx.fillStyle = cd.cls === 'P' ? '#4af' : '#ddd';
+      ctx.font = 'bold 10px monospace';
+      ctx.textAlign = 'center';
+      ctx.fillText(`${cd.cls} ${cd.score}`, gx + cellW / 2 - 1, gy + 12);
+      
+      // RGB + blue dominance
+      ctx.font = '8px monospace';
+      ctx.fillStyle = '#aaa';
+      ctx.fillText(`bd:${cd.bd} s:${cd.sat}`, gx + cellW / 2 - 1, gy + 24);
+      ctx.fillText(`${cd.R},${cd.G},${cd.B}`, gx + cellW / 2 - 1, gy + 33);
+      ctx.textAlign = 'left';
+    }
+  }
 }

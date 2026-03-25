@@ -122,7 +122,7 @@ class App {
     const detectTime = (performance.now() - t0).toFixed(0);
 
     // Debug visualization
-    drawDebug(this.debugCanvas, this.photoCanvas, detection.corners, detection.occupied, detection.empty);
+    drawDebug(this.debugCanvas, this.photoCanvas, detection.corners, detection.occupied, detection.empty, detection.cellDebug);
 
     try {
       // 2. Use today's date
@@ -203,12 +203,14 @@ class App {
 
       const totalTime = (performance.now() - t0).toFixed(0);
 
+      // Always show debug section so user can verify classification
+      document.getElementById('debug-section').classList.remove('hidden');
+
       if (solution) {
         this._drawResultOverlay(detection, solution, month, day);
-        this.statusEl.textContent = `Solved! (${totalTime}ms)`;
+        this.statusEl.textContent = `Solved! ${solution.length} pieces placed (${totalTime}ms) — scroll down for debug`;
       } else {
         this._drawResultOverlay(detection, [], month, day);
-        document.getElementById('debug-section').classList.remove('hidden');
         this.statusEl.textContent = `No solution: ${occupiedCount} occ, ${emptyNonDateCells.length} empty (${totalTime}ms)`;
       }
     } catch (err) {
