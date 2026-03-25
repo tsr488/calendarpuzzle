@@ -144,6 +144,10 @@ class App {
       
       const occupiedCount = detection.occupied.size;
       
+      // Identify which pieces are already on the board
+      const usedPieceIndices = identifyPlacedPieces(detection.occupied);
+      const availablePieces = PIECES.filter((_, i) => !usedPieceIndices.has(i));
+      
       // Get empty cells that aren't date cells (these need to be covered)
       const targetSet = new Set(targetCells.map(([c, r]) => cellKey(c, r)));
       const emptyNonDateCells = targetCells.filter(([c, r]) => !detection.occupied.has(cellKey(c, r)));
@@ -159,22 +163,17 @@ class App {
         return;
       }
 
-      // Estimate remaining piece count from empty cell count
-      // 7 pentominoes (5 cells) + 1 hexomino (6 cells) = 41
-      // If empty=41, all 8 pieces. If empty=36, 7 pieces (6×5+1×6 or 7×5+leftover won't work, etc.)
-      const estRemaining = Math.max(1, Math.min(8, Math.round(emptyCount / 5.125)));
-
-      this.statusEl.textContent = `${occupiedOnTarget} of 41 covered, ${emptyCount} empty, ~${estRemaining} pieces. Solving...`;
+      this.statusEl.textContent = `${occupiedOnTarget} covered, ${emptyCount} empty, ${usedPieceIndices.size} pieces detected, ${availablePieces.length} remaining. Solving...`;
       const t1 = performance.now();
       
-      // Try solving — only accepts subsets whose area matches emptyCount exactly
-      let solution = this._trySolveWithPieceSubsets(emptyNonDateCells, estRemaining);
+      // Try solving with only the available (unplaced) pieces
+      let solution = this._trySolveWithAvailable(emptyNonDateCells, availablePieces);
       
       // If that fails, try flipping the most borderline cells
       if (!solution && detection.cellScores) {
         const borderline = detection.cellScores
           .filter(cs => targetSet.has(cs.key))
-          .slice(0, 6); // up to 6 most borderline cells
+          .slice(0, 6);
         
         // Try flipping 1 borderline cell at a time
         for (let i = 0; i < borderline.length && !solution; i++) {
@@ -183,8 +182,9 @@ class App {
           if (flipped.has(cs.key)) { flipped.delete(cs.key); } else { flipped.add(cs.key); }
           
           const altEmpty = targetCells.filter(([c, r]) => !flipped.has(cellKey(c, r)));
-          const altEst = Math.max(1, Math.min(8, Math.round(altEmpty.length / 5.125)));
-          solution = this._trySolveWithPieceSubsets(altEmpty, altEst);
+          const altUsed = identifyPlacedPieces(flipped);
+          const altAvail = PIECES.filter((_, idx) => !altUsed.has(idx));
+          solution = this._trySolveWithAvailable(altEmpty, altAvail);
         }
         
         // Try flipping 2 borderline cells
@@ -196,8 +196,9 @@ class App {
               if (flipped.has(cs.key)) { flipped.delete(cs.key); } else { flipped.add(cs.key); }
             }
             const altEmpty = targetCells.filter(([c, r]) => !flipped.has(cellKey(c, r)));
-            const altEst = Math.max(1, Math.min(8, Math.round(altEmpty.length / 5.125)));
-            solution = this._trySolveWithPieceSubsets(altEmpty, altEst);
+            const altUsed = identifyPlacedPieces(flipped);
+            const altAvail = PIECES.filter((_, idx) => !altUsed.has(idx));
+            solution = this._trySolveWithAvailable(altEmpty, altAvail);
           }
         }
       }
@@ -232,24 +233,30 @@ class App {
   }
 
   /**
-   * Try solving a region with different subsets of pieces.
-   * The cell count must match the total area of the piece subset.
+   * Try solving with available (unplaced) pieces.
+   * First tries all available pieces. If area doesn't match, tries subsets.
    * @param {number[][]} cells - cells to cover
-   * @param {number} estPieceCount - estimated number of pieces to use
+   * @param {object[]} available - pieces not yet placed on the board
    * @returns {object[]|null}
    */
-  _trySolveWithPieceSubsets(cells, estPieceCount) {
+  _trySolveWithAvailable(cells, available) {
     const cellCount = cells.length;
-    if (cellCount === 0) return null;
+    if (cellCount === 0 || available.length === 0) return null;
 
-    // Only try piece subsets whose total area matches EXACTLY the empty cell count.
-    // No ±1 flexibility — wrong classification should fail, not produce wrong solutions.
-    for (let n = Math.max(1, estPieceCount - 1); n <= Math.min(8, estPieceCount + 1); n++) {
-      const combos = this._combinations(PIECES, n);
+    // First try: use ALL available pieces (most likely correct)
+    const totalArea = available.reduce((sum, p) => sum + p.coords.length, 0);
+    if (totalArea === cellCount) {
+      const solution = solvePuzzle(cells, available);
+      if (solution) return solution;
+    }
+
+    // If piece detection missed some, try subsets of available pieces
+    // whose total area matches the empty cell count
+    for (let n = available.length - 1; n >= 1; n--) {
+      const combos = this._combinations(available, n);
       for (const subset of combos) {
-        const totalArea = subset.reduce((sum, p) => sum + p.coords.length, 0);
-        if (totalArea !== cellCount) continue;
-
+        const subArea = subset.reduce((sum, p) => sum + p.coords.length, 0);
+        if (subArea !== cellCount) continue;
         const solution = solvePuzzle(cells, subset);
         if (solution) return solution;
       }
