@@ -144,7 +144,7 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
   object-fit: cover;
 }
 
-#photo-canvas, #result-canvas {
+#photo-canvas {
   width: 100%;
   max-width: 400px;
   max-height: 100%;
@@ -179,12 +179,6 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
   display: flex;
   flex-direction: column;
   align-items: center;
-}
-
-.section-label {
-  font-size: 0.8rem;
-  color: var(--text-muted);
-  margin-bottom: 8px;
 }
 
 #debug-canvas {

@@ -54,8 +54,4 @@ export class Camera {
     this.active = false;
     this.video.srcObject = null;
   }
-
-  isActive() {
-    return this.active;
-  }
 }

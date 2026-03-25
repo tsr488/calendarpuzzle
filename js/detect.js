@@ -418,7 +418,7 @@ function combinations(arr, k) {
 /**
  * Draw debug visualization — per-cell classification grid only
  */
-export function drawDebug(debugCanvas, photoCanvas, corners, occupied, empty, cellDebug) {
+export function drawDebug(debugCanvas, occupied, empty, cellDebug) {
   const ctx = debugCanvas.getContext('2d');
   const dpr = window.devicePixelRatio || 1;
 

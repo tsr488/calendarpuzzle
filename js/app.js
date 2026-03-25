@@ -1,5 +1,5 @@
 // Main application: camera capture, auto-detect, solve, overlay
-import { PIECES, BOARD_CELLS, getCellsToCover, cellKey, BOARD_COLS, BOARD_ROWS, getCellLabel, isBoardCell } from './board.js';
+import { PIECES, BOARD_CELLS, getCellsToCover, cellKey, BOARD_COLS, BOARD_ROWS, isBoardCell } from './board.js';
 import { solvePuzzle } from './solver.js';
 import { Camera } from './camera.js';
 import { waitForOpenCV, detectBoard, reclassifyWithOffset, identifyPlacedPieces, drawDebug } from './detect.js';
@@ -59,15 +59,15 @@ class App {
     this.statusEl = document.getElementById('status');
     this.startBtn = document.getElementById('camera-start-btn');
     this.captureBtn = document.getElementById('camera-capture-btn');
-    this.retakeBtn = document.getElementById('camera-retake-btn');
     this.hintBtn = document.getElementById('hint-btn');
-    this.resultCanvas = document.getElementById('result-canvas');
     this.photoCanvas = photoCanvas;
     this.debugCanvas = document.getElementById('debug-canvas');
 
     this.startBtn.addEventListener('click', () => this._startCamera());
-    this.captureBtn.addEventListener('click', () => this._captureAndSolve());
-    this.retakeBtn.addEventListener('click', () => this._retake());
+    this.captureBtn.addEventListener('click', () => {
+      if (this._captured) this._retake();
+      else this._captureAndSolve();
+    });
     this.hintBtn.addEventListener('click', () => this._showNextHint());
 
     // Debug toggle button
@@ -93,7 +93,8 @@ class App {
       document.getElementById('camera-video').classList.remove('hidden');
       this.startBtn.classList.add('hidden');
       this.captureBtn.disabled = false;
-      this.retakeBtn.classList.add('hidden');
+      this.captureBtn.textContent = 'Capture';
+      this._captured = false;
       this.photoCanvas.classList.add('hidden');
       document.getElementById('debug-section').classList.add('hidden');
       this.statusEl.textContent = 'Point at puzzle board, then tap Capture';
@@ -123,8 +124,8 @@ class App {
     this.photoCanvas.style.height = Math.round(maxW * aspect) + 'px';
 
     // Update UI
-    this.captureBtn.disabled = true;
-    this.retakeBtn.classList.remove('hidden');
+    this.captureBtn.textContent = 'Retake';
+    this._captured = true;
     this.solving = true;
     this.statusEl.textContent = 'Detecting board...';
 
@@ -141,7 +142,7 @@ class App {
     } catch (err) {
       console.error('Detection error:', err);
       // Still try to draw debug with whatever we have
-      drawDebug(this.debugCanvas, this.photoCanvas, null, new Set(), new Set());
+      drawDebug(this.debugCanvas, new Set(), new Set());
       this.statusEl.textContent = err.message;
       this.solving = false;
       return;
@@ -203,7 +204,7 @@ class App {
       this._photoImageData = pCtx.getImageData(0, 0, this.photoCanvas.width, this.photoCanvas.height);
 
       // Populate debug canvas (hidden until long-press on status)
-      drawDebug(this.debugCanvas, this.photoCanvas, detection.corners, detection.occupied, detection.empty, detection.cellDebug);
+      drawDebug(this.debugCanvas, detection.occupied, detection.empty, detection.cellDebug);
 
       // Draw occupied overlay (always, even without solution)
       this._drawResultOverlay(detection, [], month, day);
@@ -398,7 +399,7 @@ class App {
 
     const remaining = this._solution.length - this._hintIndex;
     if (remaining > 0) {
-      this.statusEl.textContent = `Hint ${this._hintIndex}/${this._solution.length}. ${remaining} more`;
+      this.statusEl.textContent = `Hint ${this._hintIndex}/${this._solution.length}`;
     } else {
       this.statusEl.textContent = `All ${this._solution.length} pieces revealed!`;
       this.hintBtn.classList.add('hidden');

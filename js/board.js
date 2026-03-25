@@ -23,7 +23,7 @@ for (let d = 15; d <= 21; d++) DAY_CELLS[d] = [d - 15, 2];
 for (let d = 22; d <= 28; d++) DAY_CELLS[d] = [d - 22, 1];
 for (let d = 29; d <= 31; d++) DAY_CELLS[d] = [d - 29, 0];
 
-export const MONTH_NAMES = [
+const MONTH_NAMES = [
   '', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
   'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'
 ];
