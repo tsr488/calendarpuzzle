@@ -220,6 +220,9 @@ class App {
       const pCtx = this.photoCanvas.getContext('2d');
       this._photoImageData = pCtx.getImageData(0, 0, this.photoCanvas.width, this.photoCanvas.height);
 
+      // Store detection so tap-to-fix works even when solver fails
+      this._detection = detection;
+
       // Populate debug canvas (hidden until long-press on status)
       drawDebug(this.debugCanvas, detection.occupied, detection.empty, detection.cellDebug);
 
@@ -245,7 +248,6 @@ class App {
 
           // Store for hint mode
           this._solution = solution;
-          this._detection = detection;
           this._hintIndex = 0;
           this._solveMonth = month;
           this._solveDay = day;
