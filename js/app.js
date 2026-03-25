@@ -54,11 +54,13 @@ class App {
     try {
       this.statusEl.textContent = 'Starting camera...';
       await this.camera.start();
+      document.getElementById('camera-video').classList.remove('hidden');
       this.startBtn.classList.add('hidden');
       this.captureBtn.disabled = false;
       this.retakeBtn.classList.add('hidden');
       this.photoCanvas.classList.add('hidden');
       this.resultCanvas.classList.add('hidden');
+      document.getElementById('debug-section').classList.add('hidden');
       this.statusEl.textContent = 'Point at puzzle board, then tap Capture & Solve';
     } catch (err) {
       this.statusEl.textContent = 'Camera error: ' + (err.message || 'denied');
@@ -77,7 +79,8 @@ class App {
     if (!frameInfo) return;
     this.camera.stop();
 
-    // Show the captured photo
+    // Hide video, show captured photo
+    document.getElementById('camera-video').classList.add('hidden');
     this.photoCanvas.classList.remove('hidden');
     const maxW = Math.min(400, window.innerWidth - 32);
     const aspect = frameInfo.height / frameInfo.width;
