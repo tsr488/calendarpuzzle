@@ -338,40 +338,40 @@ class App {
       ctx.stroke();
     }
 
-    // Draw solution pieces on top
-    if (solution && solution.length > 0) {
-      // Collect all cells covered by solution pieces
-      const solutionCells = new Set();
+    // Draw date cells in green (unless a solution piece covers them)
+    const solutionCells = new Set();
+    if (solution) {
       for (const placement of solution) {
         for (const [c, r] of placement.cells) solutionCells.add(`${c},${r}`);
       }
-
-      // Draw date cells in green (unless a solution piece covers them)
-      const monthCell = MONTH_CELLS[month];
-      const dayCell = DAY_CELLS[day];
-      if (monthCell || dayCell) {
-        ctx.fillStyle = 'rgba(0, 128, 0, 0.3)';
-        ctx.strokeStyle = 'rgba(0, 128, 0, 0.85)';
-        ctx.lineWidth = 2.5;
-        for (const cell of [monthCell, dayCell]) {
-          if (!cell) continue;
-          const [c, r] = cell;
-          if (solutionCells.has(`${c},${r}`)) continue;
-          fillCell(c, r, ctx);
-          const p0 = gridToPhoto(c, r);
-          const p1 = gridToPhoto(c + 1, r);
-          const p2 = gridToPhoto(c + 1, r - 1);
-          const p3 = gridToPhoto(c, r - 1);
-          ctx.beginPath();
-          ctx.moveTo(p0[0], p0[1]);
-          ctx.lineTo(p1[0], p1[1]);
-          ctx.lineTo(p2[0], p2[1]);
-          ctx.lineTo(p3[0], p3[1]);
-          ctx.closePath();
-          ctx.stroke();
-        }
+    }
+    const monthCell = MONTH_CELLS[month];
+    const dayCell = DAY_CELLS[day];
+    if (monthCell || dayCell) {
+      ctx.fillStyle = 'rgba(0, 128, 0, 0.3)';
+      ctx.strokeStyle = 'rgba(0, 128, 0, 0.85)';
+      ctx.lineWidth = 2.5;
+      for (const cell of [monthCell, dayCell]) {
+        if (!cell) continue;
+        const [c, r] = cell;
+        if (solutionCells.has(`${c},${r}`)) continue;
+        fillCell(c, r, ctx);
+        const p0 = gridToPhoto(c, r);
+        const p1 = gridToPhoto(c + 1, r);
+        const p2 = gridToPhoto(c + 1, r - 1);
+        const p3 = gridToPhoto(c, r - 1);
+        ctx.beginPath();
+        ctx.moveTo(p0[0], p0[1]);
+        ctx.lineTo(p1[0], p1[1]);
+        ctx.lineTo(p2[0], p2[1]);
+        ctx.lineTo(p3[0], p3[1]);
+        ctx.closePath();
+        ctx.stroke();
       }
+    }
 
+    // Draw solution pieces on top
+    if (solution && solution.length > 0) {
       for (const placement of solution) {
         ctx.fillStyle = placement.color + '99';
         ctx.strokeStyle = placement.color;
