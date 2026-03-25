@@ -92,7 +92,6 @@ class App {
       this.captureBtn.disabled = false;
       this.retakeBtn.classList.add('hidden');
       this.photoCanvas.classList.add('hidden');
-      this.resultCanvas.classList.add('hidden');
       document.getElementById('debug-section').classList.add('hidden');
       this.statusEl.textContent = 'Point at puzzle board, then tap Capture & Solve';
     } catch (err) {
@@ -281,28 +280,13 @@ class App {
   }
 
   /**
-   * Draw the solution overlay directly on the captured photo.
+   * Draw the solution overlay directly on the captured photo canvas.
    * Uses the detected corners to map grid cells back to photo coordinates.
    */
   _drawResultOverlay(detection, solution, month, day) {
-    const canvas = this.resultCanvas;
-    canvas.classList.remove('hidden');
-
-    const dpr = window.devicePixelRatio || 1;
-    const photoW = this.photoCanvas.width;
-    const photoH = this.photoCanvas.height;
-
-    canvas.width = photoW;
-    canvas.height = photoH;
-    canvas.style.width = (photoW / dpr) + 'px';
-    canvas.style.height = (photoH / dpr) + 'px';
-    const ctx = canvas.getContext('2d');
-
-    // Draw the photo as background
-    ctx.drawImage(this.photoCanvas, 0, 0);
-
     if (!detection.corners || !solution || solution.length === 0) return;
 
+    const ctx = this.photoCanvas.getContext('2d');
     const [tl, tr, br, bl] = detection.corners;
 
     // Map a grid cell (col, row) to photo pixel coordinates.
@@ -376,7 +360,6 @@ class App {
   }
 
   _retake() {
-    this.resultCanvas.classList.add('hidden');
     this.photoCanvas.classList.add('hidden');
     document.getElementById('debug-section').classList.add('hidden');
     this._startCamera();
