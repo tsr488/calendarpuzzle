@@ -404,91 +404,45 @@ function generateAllOrientations(coords) {
 }
 
 /**
- * Draw debug visualization — board corners + per-cell classification grid
+ * Draw debug visualization — per-cell classification grid only
  */
 export function drawDebug(debugCanvas, photoCanvas, corners, occupied, empty, cellDebug) {
   const ctx = debugCanvas.getContext('2d');
   const dpr = window.devicePixelRatio || 1;
-  debugCanvas.width = photoCanvas.width;
-  debugCanvas.height = photoCanvas.height;
-  debugCanvas.style.width = (photoCanvas.width / dpr) + 'px';
-  debugCanvas.style.height = (photoCanvas.height / dpr) + 'px';
-  ctx.drawImage(photoCanvas, 0, 0);
 
-  if (corners) {
-    ctx.strokeStyle = '#0f0';
-    ctx.lineWidth = 4;
-    ctx.beginPath();
-    ctx.moveTo(corners[0][0], corners[0][1]);
-    for (let i = 1; i < 4; i++) ctx.lineTo(corners[i][0], corners[i][1]);
-    ctx.closePath();
-    ctx.stroke();
-
-    // Label corners
-    const labels = ['TL', 'TR', 'BR', 'BL'];
-    for (let i = 0; i < 4; i++) {
-      ctx.fillStyle = '#f00';
-      ctx.beginPath();
-      ctx.arc(corners[i][0], corners[i][1], 10, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.fillStyle = '#fff';
-      ctx.font = 'bold 14px system-ui';
-      ctx.fillText(labels[i], corners[i][0] + 14, corners[i][1] + 5);
-    }
-  }
-
-  // Show classification counts
-  ctx.fillStyle = 'rgba(0,0,0,0.7)';
-  ctx.fillRect(0, 0, 300, 30);
-  ctx.fillStyle = '#0f0';
-  ctx.font = '14px monospace';
-  ctx.fillText(`occupied: ${occupied.size}  empty: ${empty.size}`, 10, 20);
-
-  // Draw per-cell debug grid below the photo
+  // Draw per-cell debug grid (skip photo + corner overlay)
   if (cellDebug && cellDebug.length > 0) {
-    const gridTop = (photoCanvas.height / dpr) + 10;
     const cellW = 48, cellH = 36;
     const gridW = BOARD_COLS * cellW + 20;
-    const gridH = BOARD_ROWS * cellH + 20;
-    
-    // Expand canvas to fit grid
-    const totalH = photoCanvas.height + (gridH + 20) * dpr;
-    debugCanvas.height = totalH;
-    debugCanvas.style.height = (totalH / dpr) + 'px';
+    const gridH = BOARD_ROWS * cellH + 40;
+
+    debugCanvas.width = gridW * dpr;
+    debugCanvas.height = gridH * dpr;
+    debugCanvas.style.width = gridW + 'px';
+    debugCanvas.style.height = gridH + 'px';
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.drawImage(photoCanvas, 0, 0, photoCanvas.width / dpr, photoCanvas.height / dpr);
 
-    // Redraw corners on expanded canvas
-    if (corners) {
-      ctx.strokeStyle = '#0f0';
-      ctx.lineWidth = 4;
-      ctx.beginPath();
-      ctx.moveTo(corners[0][0], corners[0][1]);
-      for (let i = 1; i < 4; i++) ctx.lineTo(corners[i][0], corners[i][1]);
-      ctx.closePath();
-      ctx.stroke();
-    }
-    ctx.fillStyle = 'rgba(0,0,0,0.7)';
-    ctx.fillRect(0, 0, 300, 30);
-    ctx.fillStyle = '#0f0';
-    ctx.font = '14px monospace';
-    ctx.fillText(`occupied: ${occupied.size}  empty: ${empty.size}`, 10, 20);
-
-    // Grid background
+    // Background
     ctx.fillStyle = '#1a1a2e';
-    ctx.fillRect(0, gridTop, gridW, gridH);
+    ctx.fillRect(0, 0, gridW, gridH);
+
+    // Header
+    ctx.fillStyle = '#fff';
+    ctx.font = 'bold 12px monospace';
+    const thr = cellDebug[0]?.thr || '?';
+    ctx.fillText(`occ:${occupied.size} empty:${empty.size} thr:${thr}`, 10, 14);
 
     // Title
     ctx.fillStyle = '#fff';
     ctx.font = 'bold 12px monospace';
     const thr = cellDebug[0]?.thr || '?';
-    ctx.fillText(`Cell Class (P=piece W=wood) thr:${thr}`, 10, gridTop + 14);
+    ctx.fillText(`occ:${occupied.size} empty:${empty.size} thr:${thr}`, 10, 14);
 
     for (const cd of cellDebug) {
       const gx = 10 + cd.col * cellW;
-      const gy = gridTop + 20 + (BOARD_ROWS - 1 - cd.row) * cellH;
+      const gy = 20 + (BOARD_ROWS - 1 - cd.row) * cellH;
 
-      // Background color: green=piece, tan=wood
+      // Background color: blue=piece, tan=wood
       ctx.fillStyle = cd.cls === 'P' ? 'rgba(0,100,255,0.4)' : 'rgba(200,180,140,0.4)';
       ctx.fillRect(gx, gy, cellW - 2, cellH - 2);
       ctx.strokeStyle = '#555';
@@ -501,7 +455,7 @@ export function drawDebug(debugCanvas, photoCanvas, corners, occupied, empty, ce
       ctx.textAlign = 'center';
       ctx.fillText(`${cd.cls} ${cd.score}`, gx + cellW / 2 - 1, gy + 12);
       
-      // RGB + blue dominance
+      // Blue dominance + saturation
       ctx.font = '8px monospace';
       ctx.fillStyle = '#aaa';
       ctx.fillText(`bd:${cd.bd} s:${cd.sat}`, gx + cellW / 2 - 1, gy + 24);
