@@ -1,5 +1,5 @@
 ﻿// Polyomino puzzle solver — converts calendar puzzle to exact cover and solves via DLX
-import { PIECES, BOARD_CELLS, cellKey } from './board.js';
+import { PIECES, cellKey } from './board.js';
 import { DLX } from './dlx.js';
 
 // Generate all rotations and reflections of a piece

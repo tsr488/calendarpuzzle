@@ -7,7 +7,7 @@
   --border: #2a2a4a;
 }
 
-* { box-sizing: border-box; margin: 0; padding: 0; }
+* { box-sizing: border-box; margin: 0; padding: 0; touch-action: manipulation; }
 
 body {
   font-family: -apple-system, BlinkMacSystemFont, 'SF Pro', system-ui, sans-serif;
@@ -150,7 +150,6 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
   max-height: 100%;
   border-radius: 12px;
   object-fit: contain;
-  touch-action: manipulation;
 }
 
 .camera-controls {
