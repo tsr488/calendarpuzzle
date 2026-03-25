@@ -102,7 +102,7 @@ class App {
       this.retakeBtn.classList.add('hidden');
       this.photoCanvas.classList.add('hidden');
       document.getElementById('debug-section').classList.add('hidden');
-      this.statusEl.textContent = 'Point at puzzle board, then tap Capture & Solve';
+      this.statusEl.textContent = 'Point at puzzle board, then tap Capture';
     } catch (err) {
       this.statusEl.textContent = 'Camera error: ' + (err.message || 'denied');
     }
@@ -139,7 +139,6 @@ class App {
   }
 
   _detectAndSolve() {
-    const t0 = performance.now();
     let detection = null;
 
     try {
@@ -153,8 +152,6 @@ class App {
       this.solving = false;
       return;
     }
-
-    const detectTime = (performance.now() - t0).toFixed(0);
 
     try {
       // 2. Use today's date
@@ -207,8 +204,6 @@ class App {
 
       detection = bestDetection;
 
-      const totalTime = (performance.now() - t0).toFixed(0);
-
       // Save pristine photo for hint redraws
       const pCtx = this.photoCanvas.getContext('2d');
       this._photoImageData = pCtx.getImageData(0, 0, this.photoCanvas.width, this.photoCanvas.height);
@@ -224,7 +219,7 @@ class App {
         const occOnTarget = targetCells.filter(([c, r]) => detection.occupied.has(cellKey(c, r))).length;
         const totalCovered = occOnTarget + solvedArea;
         if (totalCovered !== 41) {
-          this.statusEl.textContent = `Bad detection: ${occOnTarget}+${solvedArea}=${totalCovered}≠41 (${totalTime}ms)`;
+          this.statusEl.textContent = `Bad detection: ${occOnTarget}+${solvedArea}=${totalCovered}≠41`;
         } else {
           // Sort solution pieces: upper-left first (by min row desc, then min col asc)
           solution.sort((a, b) => {
@@ -244,10 +239,10 @@ class App {
           this._solveDay = day;
 
           this.hintBtn.classList.remove('hidden');
-          this.statusEl.textContent = `Solved! ${solution.length} pieces to place. Tap 💡 Hint (${totalTime}ms)`;
+          this.statusEl.textContent = `Solved! ${solution.length} pieces to place. Tap 💡 Hint`;
         }
       } else {
-        this.statusEl.textContent = `No solution found after ${offsets.length} threshold attempts (${totalTime}ms)`;
+        this.statusEl.textContent = `No solution found after ${offsets.length} threshold attempts`;
       }
     } catch (err) {
       console.error('Detection error:', err);
@@ -338,16 +333,16 @@ class App {
       ctx.fill();
     };
 
-    // Draw detected occupied cells — white wash + diagonal hatching
+    // Draw detected occupied cells — white wash + solid white borders
     ctx.fillStyle = 'rgba(255, 255, 255, 0.3)';
     for (const key of detection.occupied) {
       const [c, r] = key.split(',').map(Number);
       if (isBoardCell(c, r)) fillCell(c, r, ctx);
     }
 
-    // Diagonal hatch lines over occupied cells
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.5)';
-    ctx.lineWidth = 1.5;
+    // Solid white borders for every occupied cell (all 4 sides)
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.85)';
+    ctx.lineWidth = 2.5;
     for (const key of detection.occupied) {
       const [c, r] = key.split(',').map(Number);
       if (!isBoardCell(c, r)) continue;
@@ -355,16 +350,12 @@ class App {
       const p1 = gridToPhoto(c + 1, r);
       const p2 = gridToPhoto(c + 1, r - 1);
       const p3 = gridToPhoto(c, r - 1);
-      // Draw 3 diagonal lines across the cell
       ctx.beginPath();
-      for (const t of [0.25, 0.5, 0.75]) {
-        const startX = p0[0] + (p3[0] - p0[0]) * t;
-        const startY = p0[1] + (p3[1] - p0[1]) * t;
-        const endX = p1[0] + (p2[0] - p1[0]) * t;
-        const endY = p1[1] + (p2[1] - p1[1]) * t;
-        ctx.moveTo(startX, startY);
-        ctx.lineTo(endX, endY);
-      }
+      ctx.moveTo(p0[0], p0[1]);
+      ctx.lineTo(p1[0], p1[1]);
+      ctx.lineTo(p2[0], p2[1]);
+      ctx.lineTo(p3[0], p3[1]);
+      ctx.closePath();
       ctx.stroke();
     }
 
