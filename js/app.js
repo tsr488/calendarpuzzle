@@ -1,262 +1,253 @@
-﻿// Main application controller
-import { PIECES, getCellsToCover, MONTH_NAMES } from './board.js';
+﻿// Main application — camera capture → auto-detect → solve → overlay
+import { PIECES, BOARD_CELLS, getCellsToCover, cellKey, BOARD_COLS, BOARD_ROWS, getCellLabel } from './board.js';
 import { solvePuzzle } from './solver.js';
-import { BoardRenderer } from './renderer.js';
 import { Camera } from './camera.js';
-import { CvPipeline } from './cv-pipeline.js';
+import { waitForOpenCV, detectBoard, identifyPlacedPieces, drawDebug } from './detect.js';
 
 class App {
   constructor() {
-    this.renderer = null;
-    this.currentMonth = new Date().getMonth() + 1;
-    this.currentDay = new Date().getDate();
-    this.solution = null;
-    this.solving = false;
     this.camera = null;
-    this.cvPipeline = null;
+    this.cvReady = false;
+    this.solving = false;
   }
 
-  init() {
-    // --- Quick Solve ---
-    const canvas = document.getElementById('puzzle-canvas');
-    this.renderer = new BoardRenderer(canvas);
-
-    this.monthSelect = document.getElementById('month-select');
-    this.daySelect = document.getElementById('day-select');
-    this.solveBtn = document.getElementById('solve-btn');
-    this.statusEl = document.getElementById('status');
-    this.todayBtn = document.getElementById('today-btn');
-
-    for (let m = 1; m <= 12; m++) {
-      const opt = document.createElement('option');
-      opt.value = m;
-      opt.textContent = MONTH_NAMES[m];
-      if (m === this.currentMonth) opt.selected = true;
-      this.monthSelect.appendChild(opt);
-    }
-
-    for (let d = 1; d <= 31; d++) {
-      const opt = document.createElement('option');
-      opt.value = d;
-      opt.textContent = d;
-      if (d === this.currentDay) opt.selected = true;
-      this.daySelect.appendChild(opt);
-    }
-
-    this.solveBtn.addEventListener('click', () => this.solve());
-    this.todayBtn.addEventListener('click', () => this.setToday());
-    this.monthSelect.addEventListener('change', () => this.onDateChange());
-    this.daySelect.addEventListener('change', () => this.onDateChange());
-
-    this.onDateChange();
-    this.solve();
-
-    // --- Tab switching ---
-    this._initTabs();
-
-    // --- Camera Assist ---
-    this._initCameraAssist();
-  }
-
-  // ─── Tab management ────────────────────────────────────
-  _initTabs() {
-    const tabs = document.querySelectorAll('.tab');
-    tabs.forEach(tab => {
-      tab.addEventListener('click', () => {
-        tabs.forEach(t => t.classList.remove('active'));
-        tab.classList.add('active');
-        document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
-        const viewId = tab.dataset.tab;
-        document.getElementById(viewId).classList.add('active');
-        // Stop camera when switching away
-        if (viewId !== 'camera-assist' && this.camera && this.camera.isActive()) {
-          this._stopCamera();
-        }
-      });
-    });
-  }
-
-  // ─── Camera Assist ─────────────────────────────────────
-  _initCameraAssist() {
+  async init() {
     const videoEl = document.getElementById('camera-video');
     const photoCanvas = document.getElementById('photo-canvas');
-    const overlayCanvas = document.getElementById('grid-overlay');
-    const gridSection = document.getElementById('grid-overlay-section');
-
     this.camera = new Camera(videoEl, photoCanvas);
-    this.cvPipeline = new CvPipeline(overlayCanvas, photoCanvas);
 
-    this.cameraStatusEl = document.getElementById('camera-status');
-    this.cameraStartBtn = document.getElementById('camera-start-btn');
-    this.cameraCaptureBtn = document.getElementById('camera-capture-btn');
-    this.cameraStopBtn = document.getElementById('camera-stop-btn');
-    this.overlaySolveBtn = document.getElementById('overlay-solve-btn');
-    this.overlayResetBtn = document.getElementById('overlay-reset-btn');
+    this.statusEl = document.getElementById('status');
+    this.startBtn = document.getElementById('camera-start-btn');
+    this.captureBtn = document.getElementById('camera-capture-btn');
+    this.retakeBtn = document.getElementById('camera-retake-btn');
+    this.resultCanvas = document.getElementById('result-canvas');
+    this.photoCanvas = photoCanvas;
+    this.debugCanvas = document.getElementById('debug-canvas');
 
-    // Build color picker
-    this._buildColorPicker();
+    this.startBtn.addEventListener('click', () => this._startCamera());
+    this.captureBtn.addEventListener('click', () => this._captureAndSolve());
+    this.retakeBtn.addEventListener('click', () => this._retake());
 
-    // Camera buttons
-    this.cameraStartBtn.addEventListener('click', () => this._startCamera());
-    this.cameraCaptureBtn.addEventListener('click', () => this._capturePhoto());
-    this.cameraStopBtn.addEventListener('click', () => this._stopCamera());
-
-    // Overlay buttons
-    this.overlaySolveBtn.addEventListener('click', () => this._solveRemaining());
-    this.overlayResetBtn.addEventListener('click', () => {
-      this.cvPipeline.reset();
-      this.cameraStatusEl.textContent = '';
+    // Long-press status to toggle debug view
+    let pressTimer;
+    this.statusEl.addEventListener('pointerdown', () => {
+      pressTimer = setTimeout(() => {
+        const dbg = document.getElementById('debug-section');
+        dbg.classList.toggle('hidden');
+      }, 800);
     });
-  }
+    this.statusEl.addEventListener('pointerup', () => clearTimeout(pressTimer));
+    this.statusEl.addEventListener('pointerleave', () => clearTimeout(pressTimer));
 
-  _buildColorPicker() {
-    const picker = document.querySelector('.color-picker');
-    PIECES.forEach((piece, i) => {
-      const btn = document.createElement('button');
-      btn.className = 'color-swatch' + (i === 0 ? ' active' : '');
-      btn.style.background = piece.color;
-      btn.textContent = piece.name;
-      btn.dataset.index = i;
-      btn.addEventListener('click', () => {
-        picker.querySelectorAll('.color-swatch').forEach(s => s.classList.remove('active'));
-        btn.classList.add('active');
-        this.cvPipeline.setColor(i);
-      });
-      picker.appendChild(btn);
-    });
+    // Load OpenCV.js
+    this.statusEl.textContent = 'Loading OpenCV...';
+    try {
+      await waitForOpenCV();
+      this.cvReady = true;
+      this.statusEl.textContent = 'Ready — tap Start Camera';
+    } catch {
+      this.statusEl.textContent = 'OpenCV failed to load. Refresh to retry.';
+    }
   }
 
   async _startCamera() {
     try {
-      this.cameraStatusEl.textContent = 'Starting camera...';
+      this.statusEl.textContent = 'Starting camera...';
       await this.camera.start();
-      this.cameraStartBtn.disabled = true;
-      this.cameraCaptureBtn.disabled = false;
-      this.cameraStopBtn.disabled = false;
-      this.cameraStatusEl.textContent = 'Camera ready — point at the puzzle board';
+      this.startBtn.classList.add('hidden');
+      this.captureBtn.disabled = false;
+      this.retakeBtn.classList.add('hidden');
+      this.photoCanvas.classList.add('hidden');
+      this.resultCanvas.classList.add('hidden');
+      this.statusEl.textContent = 'Point at puzzle board, then tap Capture & Solve';
     } catch (err) {
-      this.cameraStatusEl.textContent = 'Camera error: ' + (err.message || 'Access denied');
+      this.statusEl.textContent = 'Camera error: ' + (err.message || 'denied');
     }
   }
 
-  _capturePhoto() {
-    const result = this.camera.capture();
-    if (!result) return;
+  async _captureAndSolve() {
+    if (!this.cvReady) {
+      this.statusEl.textContent = 'OpenCV still loading...';
+      return;
+    }
+    if (this.solving) return;
+
+    // Capture photo
+    const frameInfo = this.camera.capture();
+    if (!frameInfo) return;
+    this.camera.stop();
 
     // Show the captured photo
-    const photoCanvas = document.getElementById('photo-canvas');
-    photoCanvas.classList.remove('hidden');
-    // Set display size to fit
+    this.photoCanvas.classList.remove('hidden');
     const maxW = Math.min(400, window.innerWidth - 32);
-    const aspect = result.height / result.width;
-    photoCanvas.style.width = maxW + 'px';
-    photoCanvas.style.height = Math.round(maxW * aspect) + 'px';
+    const aspect = frameInfo.height / frameInfo.width;
+    this.photoCanvas.style.width = maxW + 'px';
+    this.photoCanvas.style.height = Math.round(maxW * aspect) + 'px';
 
-    // Stop camera after capture
-    this._stopCamera();
-
-    // Show grid overlay
-    const gridSection = document.getElementById('grid-overlay-section');
-    gridSection.classList.remove('hidden');
-    this.cvPipeline.layout(maxW);
-    this.cvPipeline.startInteraction();
-    this.cameraStatusEl.textContent = 'Tap cells occupied by pieces, then solve';
-  }
-
-  _stopCamera() {
-    this.camera.stop();
-    this.cameraStartBtn.disabled = false;
-    this.cameraCaptureBtn.disabled = true;
-    this.cameraStopBtn.disabled = true;
-  }
-
-  _solveRemaining() {
-    if (this.solving) return;
-
-    const unmarked = this.cvPipeline.getUnmarkedCells();
-    const remainingPieces = this.cvPipeline.getRemainingPieces();
-
-    if (unmarked.length === 0) {
-      this.cameraStatusEl.textContent = 'All cells are marked — nothing to solve';
-      return;
-    }
-
-    if (remainingPieces.length === 0) {
-      this.cameraStatusEl.textContent = 'All pieces are used — nothing to solve';
-      return;
-    }
-
+    // Update UI
+    this.captureBtn.disabled = true;
+    this.retakeBtn.classList.remove('hidden');
     this.solving = true;
-    this.overlaySolveBtn.disabled = true;
-    this.cameraStatusEl.textContent = 'Solving...';
+    this.statusEl.textContent = 'Detecting board...';
 
-    setTimeout(() => {
-      const t0 = performance.now();
-      const solution = solvePuzzle(unmarked, remainingPieces);
-      const elapsed = (performance.now() - t0).toFixed(1);
+    // Run detection + solve in next frame to let UI update
+    setTimeout(() => this._detectAndSolve(), 50);
+  }
 
-      this.solving = false;
-      this.overlaySolveBtn.disabled = false;
+  _detectAndSolve() {
+    const t0 = performance.now();
+
+    try {
+      // 1. Detect board and classify cells
+      const detection = detectBoard(this.photoCanvas);
+      const detectTime = (performance.now() - t0).toFixed(0);
+
+      // Debug visualization
+      drawDebug(this.debugCanvas, this.photoCanvas, detection.corners, detection.occupied, detection.empty);
+
+      // 2. Determine what needs solving
+      // The empty cells (uncovered by pieces) include the date cells + any unplaced area
+      // For now, use today's date to know which 2 cells SHOULD be empty
+      const today = new Date();
+      const month = today.getMonth() + 1;
+      const day = today.getDate();
+      const targetCells = getCellsToCover(month, day);
+
+      if (!targetCells) {
+        this.statusEl.textContent = 'Invalid date';
+        this.solving = false;
+        return;
+      }
+
+      // 3. Figure out which pieces are already placed
+      const usedPieceIndices = identifyPlacedPieces(detection.occupied);
+      const remainingPieces = PIECES.filter((_, i) => !usedPieceIndices.has(i));
+
+      // 4. The cells that still need covering = target cells minus already-occupied cells
+      const stillNeedCovering = targetCells.filter(([c, r]) => !detection.occupied.has(cellKey(c, r)));
+
+      if (stillNeedCovering.length === 0) {
+        this._drawResultOverlay(detection, [], month, day);
+        this.statusEl.textContent = `Puzzle already solved! (detected in ${detectTime}ms)`;
+        this.solving = false;
+        return;
+      }
+
+      // 5. Solve remaining
+      this.statusEl.textContent = 'Solving...';
+      const t1 = performance.now();
+      const solution = solvePuzzle(stillNeedCovering, remainingPieces);
+      const solveTime = (performance.now() - t1).toFixed(0);
+      const totalTime = (performance.now() - t0).toFixed(0);
 
       if (solution) {
-        this.cvPipeline.drawSolution(solution);
-        this.cameraStatusEl.textContent = `Solved in ${elapsed}ms — ${remainingPieces.length} pieces placed`;
+        this._drawResultOverlay(detection, solution, month, day);
+        const nPlaced = usedPieceIndices.size;
+        const nRemaining = remainingPieces.length;
+        this.statusEl.textContent = `Found ${nPlaced} placed, solved ${nRemaining} remaining (${totalTime}ms)`;
       } else {
-        this.cameraStatusEl.textContent = `No solution found (${elapsed}ms) — check marked cells`;
+        this.statusEl.textContent = `No solution found — try recapturing (${totalTime}ms)`;
       }
-    }, 20);
-  }
-
-  // ─── Quick Solve (existing) ────────────────────────────
-  setToday() {
-    const now = new Date();
-    this.monthSelect.value = now.getMonth() + 1;
-    this.daySelect.value = now.getDate();
-    this.onDateChange();
-    this.solve();
-  }
-
-  onDateChange() {
-    this.currentMonth = parseInt(this.monthSelect.value);
-    this.currentDay = parseInt(this.daySelect.value);
-    this.solution = null;
-    this.renderer.drawBoard(this.currentMonth, this.currentDay);
-    this.statusEl.textContent = '';
-  }
-
-  solve() {
-    if (this.solving) return;
-
-    const month = this.currentMonth;
-    const day = this.currentDay;
-    const cellsToCover = getCellsToCover(month, day);
-
-    if (!cellsToCover) {
-      this.statusEl.textContent = 'Invalid date';
-      return;
+    } catch (err) {
+      console.error('Detection error:', err);
+      this.statusEl.textContent = 'Detection failed: ' + err.message;
     }
 
-    this.solving = true;
-    this.solveBtn.disabled = true;
-    this.statusEl.textContent = 'Solving...';
+    this.solving = false;
+  }
 
-    setTimeout(() => {
-      const t0 = performance.now();
-      const solution = solvePuzzle(cellsToCover, PIECES);
-      const elapsed = (performance.now() - t0).toFixed(1);
+  /**
+   * Draw the solution overlay on the result canvas
+   */
+  _drawResultOverlay(detection, solution, month, day) {
+    const canvas = this.resultCanvas;
+    canvas.classList.remove('hidden');
 
-      this.solving = false;
-      this.solveBtn.disabled = false;
+    const cellPx = 48;
+    const offsetX = 10;
+    const offsetY = 10;
+    const w = BOARD_COLS * cellPx + offsetX * 2;
+    const h = BOARD_ROWS * cellPx + offsetY * 2;
+    const dpr = window.devicePixelRatio || 1;
+    canvas.width = w * dpr;
+    canvas.height = h * dpr;
+    canvas.style.width = w + 'px';
+    canvas.style.height = h + 'px';
+    const ctx = canvas.getContext('2d');
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
-      if (solution) {
-        this.solution = solution;
-        this.renderer.drawSolution(solution, month, day);
-        this.statusEl.textContent = `Solved in ${elapsed}ms`;
+    const p = 2;
+
+    // Draw all board cells
+    for (const [c, r] of BOARD_CELLS) {
+      const x = offsetX + c * cellPx;
+      const y = offsetY + (BOARD_ROWS - 1 - r) * cellPx;
+      const key = cellKey(c, r);
+
+      const isOccupied = detection.occupied.has(key);
+
+      // Check if this is a "date" cell (should be visible)
+      const targetCells = getCellsToCover(month, day);
+      const isDateCell = !targetCells.some(([tc, tr]) => tc === c && tr === r) 
+        && BOARD_CELLS.some(([bc, br]) => bc === c && br === r);
+
+      if (isDateCell) {
+        ctx.fillStyle = '#fff3cd';
+      } else if (isOccupied) {
+        ctx.fillStyle = '#7f8c8d88'; // gray = detected as occupied
       } else {
-        this.statusEl.textContent = `No solution found (${elapsed}ms)`;
-        this.renderer.drawBoard(month, day);
+        ctx.fillStyle = '#f5f0e8';
       }
-    }, 20);
+
+      ctx.strokeStyle = '#c4b998';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.roundRect(x + p, y + p, cellPx - p * 2, cellPx - p * 2, 4);
+      ctx.fill();
+      ctx.stroke();
+
+      // Label
+      const label = getCellLabel(c, r);
+      ctx.fillStyle = isDateCell ? '#d63384' : '#6c757d';
+      ctx.font = isDateCell ? 'bold 13px system-ui' : '11px system-ui';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(label, x + cellPx / 2, y + cellPx / 2);
+    }
+
+    // Draw solution pieces on top
+    if (solution) {
+      for (const placement of solution) {
+        ctx.fillStyle = placement.color + 'cc';
+        for (const [c, r] of placement.cells) {
+          const x = offsetX + c * cellPx;
+          const y = offsetY + (BOARD_ROWS - 1 - r) * cellPx;
+          ctx.beginPath();
+          ctx.roundRect(x + p, y + p, cellPx - p * 2, cellPx - p * 2, 4);
+          ctx.fill();
+        }
+
+        // Piece borders
+        ctx.strokeStyle = placement.color;
+        ctx.lineWidth = 2;
+        const cellSet = new Set(placement.cells.map(([c, r]) => `${c},${r}`));
+        for (const [c, r] of placement.cells) {
+          const x = offsetX + c * cellPx;
+          const y = offsetY + (BOARD_ROWS - 1 - r) * cellPx;
+          if (!cellSet.has(`${c},${r+1}`)) { ctx.beginPath(); ctx.moveTo(x+p,y+p); ctx.lineTo(x+cellPx-p,y+p); ctx.stroke(); }
+          if (!cellSet.has(`${c},${r-1}`)) { ctx.beginPath(); ctx.moveTo(x+p,y+cellPx-p); ctx.lineTo(x+cellPx-p,y+cellPx-p); ctx.stroke(); }
+          if (!cellSet.has(`${c-1},${r}`)) { ctx.beginPath(); ctx.moveTo(x+p,y+p); ctx.lineTo(x+p,y+cellPx-p); ctx.stroke(); }
+          if (!cellSet.has(`${c+1},${r}`)) { ctx.beginPath(); ctx.moveTo(x+cellPx-p,y+p); ctx.lineTo(x+cellPx-p,y+cellPx-p); ctx.stroke(); }
+        }
+      }
+    }
+  }
+
+  _retake() {
+    this.resultCanvas.classList.add('hidden');
+    this.photoCanvas.classList.add('hidden');
+    document.getElementById('debug-section').classList.add('hidden');
+    this._startCamera();
   }
 }
 

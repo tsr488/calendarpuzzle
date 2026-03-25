@@ -1,5 +1,5 @@
 // Service Worker — cache-first strategy for offline PWA support
-const CACHE_NAME = 'calpuzzle-v1';
+const CACHE_NAME = 'calpuzzle-v2';
 const ASSETS = [
   './',
   './index.html',
@@ -11,9 +11,8 @@ const ASSETS = [
   './js/board.js',
   './js/dlx.js',
   './js/solver.js',
-  './js/renderer.js',
   './js/camera.js',
-  './js/cv-pipeline.js',
+  './js/detect.js',
 ];
 
 self.addEventListener('install', (event) => {
