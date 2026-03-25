@@ -43,12 +43,14 @@ class App {
       todayBtn.classList.add('active');
       tomorrowBtn.classList.remove('active');
       this._updateDateLabel();
+      if (this._detection && !this.solving) this._reSolve();
     });
     tomorrowBtn.addEventListener('click', () => {
       this.solveTomorrow = true;
       tomorrowBtn.classList.add('active');
       todayBtn.classList.remove('active');
       this._updateDateLabel();
+      if (this._detection && !this.solving) this._reSolve();
     });
     this._updateDateLabel();
 
