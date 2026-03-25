@@ -1,5 +1,5 @@
 // Main application — camera capture → auto-detect → solve → overlay
-import { PIECES, BOARD_CELLS, getCellsToCover, cellKey, BOARD_COLS, BOARD_ROWS, getCellLabel } from './board.js';
+import { PIECES, BOARD_CELLS, getCellsToCover, cellKey, BOARD_COLS, BOARD_ROWS, getCellLabel, isBoardCell } from './board.js';
 import { solvePuzzle } from './solver.js';
 import { Camera } from './camera.js';
 import { waitForOpenCV, detectBoard, reclassifyWithOffset, identifyPlacedPieces, drawDebug } from './detect.js';
@@ -284,19 +284,14 @@ class App {
    * Uses the detected corners to map grid cells back to photo coordinates.
    */
   _drawResultOverlay(detection, solution, month, day) {
-    if (!detection.corners || !solution || solution.length === 0) return;
+    if (!detection.corners) return;
 
     const ctx = this.photoCanvas.getContext('2d');
     const [tl, tr, br, bl] = detection.corners;
 
-    // Map a grid cell (col, row) to photo pixel coordinates.
-    // Uses bilinear interpolation between the 4 corners.
     const gridToPhoto = (col, row) => {
-      // Normalize to 0-1 within the grid
       const u = col / BOARD_COLS;
       const v = (BOARD_ROWS - 1 - row) / BOARD_ROWS;
-
-      // Bilinear interpolation
       const x = (1 - u) * (1 - v) * tl[0] + u * (1 - v) * tr[0] +
                 u * v * br[0] + (1 - u) * v * bl[0];
       const y = (1 - u) * (1 - v) * tl[1] + u * (1 - v) * tr[1] +
@@ -304,58 +299,64 @@ class App {
       return [x, y];
     };
 
-    // Draw each solution piece
-    for (const placement of solution) {
-      ctx.fillStyle = placement.color + '99'; // semi-transparent
-      ctx.strokeStyle = placement.color;
-      ctx.lineWidth = 3;
+    const fillCell = (c, r, ctx) => {
+      const p0 = gridToPhoto(c, r);
+      const p1 = gridToPhoto(c + 1, r);
+      const p2 = gridToPhoto(c + 1, r - 1);
+      const p3 = gridToPhoto(c, r - 1);
+      ctx.beginPath();
+      ctx.moveTo(p0[0], p0[1]);
+      ctx.lineTo(p1[0], p1[1]);
+      ctx.lineTo(p2[0], p2[1]);
+      ctx.lineTo(p3[0], p3[1]);
+      ctx.closePath();
+      ctx.fill();
+    };
 
-      for (const [c, r] of placement.cells) {
-        // Get the 4 corners of this cell in photo space
-        const p0 = gridToPhoto(c, r);           // top-left of cell
-        const p1 = gridToPhoto(c + 1, r);       // top-right
-        const p2 = gridToPhoto(c + 1, r - 1);   // bottom-right (row-1 = down visually)
-        const p3 = gridToPhoto(c, r - 1);        // bottom-left
+    // Draw detected occupied cells in gray
+    ctx.fillStyle = 'rgba(100, 100, 100, 0.45)';
+    for (const key of detection.occupied) {
+      const [c, r] = key.split(',').map(Number);
+      if (isBoardCell(c, r)) fillCell(c, r, ctx);
+    }
 
-        // Fill cell
-        ctx.beginPath();
-        ctx.moveTo(p0[0], p0[1]);
-        ctx.lineTo(p1[0], p1[1]);
-        ctx.lineTo(p2[0], p2[1]);
-        ctx.lineTo(p3[0], p3[1]);
-        ctx.closePath();
-        ctx.fill();
+    // Draw solution pieces on top
+    if (solution && solution.length > 0) {
+      for (const placement of solution) {
+        ctx.fillStyle = placement.color + '99';
+        ctx.strokeStyle = placement.color;
+        ctx.lineWidth = 3;
+
+        for (const [c, r] of placement.cells) {
+          fillCell(c, r, ctx);
+        }
+
+        // Draw piece borders (edges not shared with same piece)
+        const cellSet = new Set(placement.cells.map(([c, r]) => `${c},${r}`));
+        for (const [c, r] of placement.cells) {
+          const p0 = gridToPhoto(c, r);
+          const p1 = gridToPhoto(c + 1, r);
+          const p2 = gridToPhoto(c + 1, r - 1);
+          const p3 = gridToPhoto(c, r - 1);
+
+          ctx.beginPath();
+          if (!cellSet.has(`${c},${r+1}`)) { ctx.moveTo(p0[0], p0[1]); ctx.lineTo(p1[0], p1[1]); }
+          if (!cellSet.has(`${c},${r-1}`)) { ctx.moveTo(p3[0], p3[1]); ctx.lineTo(p2[0], p2[1]); }
+          if (!cellSet.has(`${c-1},${r}`)) { ctx.moveTo(p0[0], p0[1]); ctx.lineTo(p3[0], p3[1]); }
+          if (!cellSet.has(`${c+1},${r}`)) { ctx.moveTo(p1[0], p1[1]); ctx.lineTo(p2[0], p2[1]); }
+          ctx.stroke();
+        }
+
+        // Label piece name at centroid
+        const cx = placement.cells.reduce((s, [c]) => s + c, 0) / placement.cells.length;
+        const cr = placement.cells.reduce((s, [, r]) => s + r, 0) / placement.cells.length;
+        const center = gridToPhoto(cx + 0.5, cr + 0.5);
+        ctx.fillStyle = '#fff';
+        ctx.font = 'bold 14px system-ui';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(placement.name, center[0], center[1]);
       }
-
-      // Draw piece borders (edges not shared with same piece)
-      const cellSet = new Set(placement.cells.map(([c, r]) => `${c},${r}`));
-      for (const [c, r] of placement.cells) {
-        const p0 = gridToPhoto(c, r);
-        const p1 = gridToPhoto(c + 1, r);
-        const p2 = gridToPhoto(c + 1, r - 1);
-        const p3 = gridToPhoto(c, r - 1);
-
-        ctx.beginPath();
-        // Top edge (no neighbor above = r+1)
-        if (!cellSet.has(`${c},${r+1}`)) { ctx.moveTo(p0[0], p0[1]); ctx.lineTo(p1[0], p1[1]); }
-        // Bottom edge (no neighbor below = r-1)
-        if (!cellSet.has(`${c},${r-1}`)) { ctx.moveTo(p3[0], p3[1]); ctx.lineTo(p2[0], p2[1]); }
-        // Left edge (no neighbor left = c-1)
-        if (!cellSet.has(`${c-1},${r}`)) { ctx.moveTo(p0[0], p0[1]); ctx.lineTo(p3[0], p3[1]); }
-        // Right edge (no neighbor right = c+1)
-        if (!cellSet.has(`${c+1},${r}`)) { ctx.moveTo(p1[0], p1[1]); ctx.lineTo(p2[0], p2[1]); }
-        ctx.stroke();
-      }
-
-      // Label piece name at centroid
-      const cx = placement.cells.reduce((s, [c]) => s + c, 0) / placement.cells.length;
-      const cr = placement.cells.reduce((s, [, r]) => s + r, 0) / placement.cells.length;
-      const center = gridToPhoto(cx + 0.5, cr + 0.5);
-      ctx.fillStyle = '#fff';
-      ctx.font = 'bold 14px system-ui';
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.fillText(placement.name, center[0], center[1]);
     }
   }
 
