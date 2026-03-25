@@ -1,5 +1,5 @@
 // Service Worker — stale-while-revalidate for instant loads + fresh updates
-const CACHE_NAME = 'calpuzzle-v0.4.4';
+const CACHE_NAME = 'calpuzzle-v0.5.1';
 const ASSETS = [
   './',
   './index.html',
