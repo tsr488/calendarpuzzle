@@ -247,8 +247,10 @@ function classifyCells(warped, cellPx, result) {
     rawScores.push(score);
   }
 
-  // Adaptive threshold on the composite scores themselves
-  const scoreThreshold = findOtsuThreshold(rawScores);
+  // Adaptive threshold on the composite scores using largest-gap method
+  // With few piece cells vs many wood cells, Otsu gets pulled wrong.
+  // Largest gap finds the natural break between the two clusters.
+  const scoreThreshold = findLargestGapThreshold(rawScores);
 
   for (let i = 0; i < cellStats.length; i++) {
     const stats = cellStats[i];
@@ -300,6 +302,28 @@ function findOtsuThreshold(values) {
     if (wv < bestVar) { bestVar = wv; bestThresh = sorted[i]; }
   }
   return bestThresh;
+}
+
+/**
+ * Find threshold at the midpoint of the largest gap between sorted values.
+ * Works much better than Otsu when clusters are imbalanced (few pieces, many wood).
+ */
+function findLargestGapThreshold(values) {
+  const sorted = [...values].sort((a, b) => a - b);
+  const n = sorted.length;
+  if (n < 2) return sorted[0] || 0;
+
+  let bestGap = 0;
+  let bestMid = sorted[0];
+
+  for (let i = 1; i < n; i++) {
+    const gap = sorted[i] - sorted[i - 1];
+    if (gap > bestGap) {
+      bestGap = gap;
+      bestMid = (sorted[i] + sorted[i - 1]) / 2;
+    }
+  }
+  return bestMid;
 }
 
 /**
