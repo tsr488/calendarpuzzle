@@ -13,8 +13,9 @@
 </head>
 <body>
   <div class="top-bar">
-    <h1>Tom and Ryann 📅 Puzzle</h1>
     <span id="version-label" class="version-label"></span>
+    <h1>Tom and Ryann 📅 Puzzle</h1>
+    <button id="debug-toggle-btn" class="debug-toggle-btn">Debug</button>
   </div>
 
   <div class="date-toggle">
@@ -37,9 +38,8 @@
 
   <div id="status"></div>
 
-  <!-- Debug view (hidden by default, toggle with long-press on status) -->
+  <!-- Debug view (hidden by default, toggle with Debug button) -->
   <div id="debug-section" class="hidden">
-    <p class="section-label">Debug: detected grid</p>
     <canvas id="debug-canvas"></canvas>
   </div>
 

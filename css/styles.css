@@ -44,12 +44,28 @@ h1 {
 
 .version-label {
   position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 0.6rem;
+  color: var(--text-muted);
+  opacity: 0.5;
+  font-variant-numeric: tabular-nums;
+}
+
+.debug-toggle-btn {
+  position: absolute;
   right: 0;
   top: 50%;
   transform: translateY(-50%);
-  font-size: 0.65rem;
+  font-size: 0.6rem;
+  padding: 0;
+  border: none;
+  background: transparent;
   color: var(--text-muted);
-  opacity: 0.6;
+  opacity: 0.5;
+  font-weight: 400;
+  min-width: 0;
   font-variant-numeric: tabular-nums;
 }
 

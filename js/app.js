@@ -1,4 +1,4 @@
-// Main application — camera capture → auto-detect → solve → overlay
+// Main application: camera capture, auto-detect, solve, overlay
 import { PIECES, BOARD_CELLS, getCellsToCover, cellKey, BOARD_COLS, BOARD_ROWS, getCellLabel, isBoardCell } from './board.js';
 import { solvePuzzle } from './solver.js';
 import { Camera } from './camera.js';
@@ -70,23 +70,17 @@ class App {
     this.retakeBtn.addEventListener('click', () => this._retake());
     this.hintBtn.addEventListener('click', () => this._showNextHint());
 
-    // Long-press status to toggle debug view
-    let pressTimer;
-    this.statusEl.addEventListener('pointerdown', () => {
-      pressTimer = setTimeout(() => {
-        const dbg = document.getElementById('debug-section');
-        dbg.classList.toggle('hidden');
-      }, 800);
+    // Debug toggle button
+    document.getElementById('debug-toggle-btn').addEventListener('click', () => {
+      document.getElementById('debug-section').classList.toggle('hidden');
     });
-    this.statusEl.addEventListener('pointerup', () => clearTimeout(pressTimer));
-    this.statusEl.addEventListener('pointerleave', () => clearTimeout(pressTimer));
 
     // Load OpenCV.js
     this.statusEl.textContent = 'Loading OpenCV...';
     try {
       await waitForOpenCV();
       this.cvReady = true;
-      this.statusEl.textContent = 'Ready — tap Start Camera';
+      this.statusEl.textContent = 'Ready. Tap Start Camera';
     } catch {
       this.statusEl.textContent = 'OpenCV failed to load. Refresh to retry.';
     }
@@ -242,7 +236,7 @@ class App {
           this.statusEl.textContent = `Solved! ${solution.length} pieces to place. Tap 💡 Hint`;
         }
       } else {
-        this.statusEl.textContent = `No solution found after ${offsets.length} threshold attempts`;
+        this.statusEl.textContent = 'No solution found. Check if pieces were detected correctly.';
       }
     } catch (err) {
       console.error('Detection error:', err);
@@ -333,7 +327,7 @@ class App {
       ctx.fill();
     };
 
-    // Draw detected occupied cells — white wash + solid white borders
+    // Draw detected occupied cells. White wash + solid white borders
     ctx.fillStyle = 'rgba(255, 255, 255, 0.3)';
     for (const key of detection.occupied) {
       const [c, r] = key.split(',').map(Number);
@@ -404,7 +398,7 @@ class App {
 
     const remaining = this._solution.length - this._hintIndex;
     if (remaining > 0) {
-      this.statusEl.textContent = `Hint ${this._hintIndex}/${this._solution.length} — ${remaining} more`;
+      this.statusEl.textContent = `Hint ${this._hintIndex}/${this._solution.length}. ${remaining} more`;
     } else {
       this.statusEl.textContent = `All ${this._solution.length} pieces revealed!`;
       this.hintBtn.classList.add('hidden');
