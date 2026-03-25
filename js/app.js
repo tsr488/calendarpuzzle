@@ -164,6 +164,18 @@ class App {
         return;
       }
 
+      // Check if puzzle is already fully solved
+      const occOnTargetDefault = targetCells.filter(([c, r]) => detection.occupied.has(cellKey(c, r))).length;
+      if (occOnTargetDefault === 41) {
+        const pCtx = this.photoCanvas.getContext('2d');
+        this._photoImageData = pCtx.getImageData(0, 0, this.photoCanvas.width, this.photoCanvas.height);
+        this._detection = detection;
+        drawDebug(this.debugCanvas, detection.occupied, detection.empty, detection.cellDebug);
+        this.statusEl.textContent = 'Already solved! 🎉';
+        this.solving = false;
+        return;
+      }
+
       // 3. Try solving with the default detection, then adjust threshold if needed.
       //    HARD RULE: occupied + solver solution = 41 cells exactly.
       
@@ -483,11 +495,12 @@ class App {
     this._drawResultOverlay(detection, [], month, day);
 
     if (emptyNonDateCells.length === 0) {
-      this.statusEl.textContent = 'All cells occupied';
+      this._solution = null;
+      this._hintIndex = 0;
+      this.hintBtn.classList.add('hidden');
+      this.statusEl.textContent = 'Already solved! 🎉';
       return;
     }
-
-    this.statusEl.textContent = `${detection.occupied.size} occupied, ${availablePieces.length} available. Solving...`;
 
     // Solve async to let UI update
     setTimeout(() => {

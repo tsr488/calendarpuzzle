@@ -150,6 +150,7 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
   max-height: 100%;
   border-radius: 12px;
   object-fit: contain;
+  touch-action: manipulation;
 }
 
 .camera-controls {
