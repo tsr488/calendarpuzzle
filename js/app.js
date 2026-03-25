@@ -75,6 +75,9 @@ class App {
       document.getElementById('debug-section').classList.toggle('hidden');
     });
 
+    // Tap on photo canvas to toggle cell classification
+    this.photoCanvas.addEventListener('click', (e) => this._handleCanvasTap(e));
+
     // Load OpenCV.js
     this.statusEl.textContent = 'Loading OpenCV...';
     try {
@@ -237,7 +240,7 @@ class App {
           this.statusEl.textContent = `Solved! ${solution.length} pieces to place. Tap 💡 Hint`;
         }
       } else {
-        this.statusEl.textContent = 'No solution found. Check if pieces were detected correctly.';
+        this.statusEl.textContent = 'No solution. Tap cells to fix.';
       }
     } catch (err) {
       console.error('Detection error:', err);
@@ -404,6 +407,125 @@ class App {
       this.statusEl.textContent = `All ${this._solution.length} pieces revealed!`;
       this.hintBtn.classList.add('hidden');
     }
+  }
+
+  _handleCanvasTap(e) {
+    if (!this._detection || !this._detection.corners || this.solving) return;
+
+    // Map click coords to canvas pixel coords
+    const rect = this.photoCanvas.getBoundingClientRect();
+    const scaleX = this.photoCanvas.width / rect.width;
+    const scaleY = this.photoCanvas.height / rect.height;
+    const px = (e.clientX - rect.left) * scaleX;
+    const py = (e.clientY - rect.top) * scaleY;
+
+    const cell = this._photoToGrid(px, py);
+    if (!cell) return;
+
+    const [col, row] = cell;
+    const key = cellKey(col, row);
+
+    // Toggle occupied/empty
+    if (this._detection.occupied.has(key)) {
+      this._detection.occupied.delete(key);
+      this._detection.empty.add(key);
+    } else {
+      this._detection.empty.delete(key);
+      this._detection.occupied.add(key);
+    }
+
+    // Re-solve with updated classification
+    this._reSolve();
+  }
+
+  _photoToGrid(px, py) {
+    if (!this._detection.corners) return null;
+    const [tl, tr, br, bl] = this._detection.corners;
+
+    let bestCell = null;
+    let bestDist = Infinity;
+
+    for (const [c, r] of BOARD_CELLS) {
+      // Cell center in grid coords
+      const u = (c + 0.5) / BOARD_COLS;
+      const v = (BOARD_ROWS - 1 - r + 0.5) / BOARD_ROWS;
+      // Bilinear interpolation to photo coords
+      const cx = (1-u)*(1-v)*tl[0] + u*(1-v)*tr[0] + u*v*br[0] + (1-u)*v*bl[0];
+      const cy = (1-u)*(1-v)*tl[1] + u*(1-v)*tr[1] + u*v*br[1] + (1-u)*v*bl[1];
+      const dist = (px - cx) ** 2 + (py - cy) ** 2;
+      if (dist < bestDist) {
+        bestDist = dist;
+        bestCell = [c, r];
+      }
+    }
+
+    // Reject if too far from any cell center (> half cell width)
+    const avgCellSize = Math.hypot(tr[0]-tl[0], tr[1]-tl[1]) / BOARD_COLS;
+    if (Math.sqrt(bestDist) > avgCellSize * 0.7) return null;
+
+    return bestCell;
+  }
+
+  _reSolve() {
+    const detection = this._detection;
+    const target = this._getTargetDate();
+    const month = target.getMonth() + 1;
+    const day = target.getDate();
+    const targetCells = getCellsToCover(month, day);
+
+    const emptyNonDateCells = targetCells.filter(([c, r]) => !detection.occupied.has(cellKey(c, r)));
+    const usedPieceIndices = identifyPlacedPieces(detection.occupied);
+    const availablePieces = PIECES.filter((_, i) => !usedPieceIndices.has(i));
+
+    // Restore pristine photo and redraw
+    const pCtx = this.photoCanvas.getContext('2d');
+    pCtx.putImageData(this._photoImageData, 0, 0);
+    this._drawResultOverlay(detection, [], month, day);
+
+    if (emptyNonDateCells.length === 0) {
+      this.statusEl.textContent = 'All cells occupied';
+      return;
+    }
+
+    this.statusEl.textContent = `${detection.occupied.size} occupied, ${availablePieces.length} available. Solving...`;
+
+    // Solve async to let UI update
+    setTimeout(() => {
+      const solution = this._trySolveWithAvailable(emptyNonDateCells, availablePieces);
+
+      if (solution) {
+        const solvedArea = solution.reduce((sum, p) => sum + p.cells.length, 0);
+        const occOnTarget = targetCells.filter(([c, r]) => detection.occupied.has(cellKey(c, r))).length;
+        const totalCovered = occOnTarget + solvedArea;
+
+        if (totalCovered !== 41) {
+          this.statusEl.textContent = `Bad detection: ${occOnTarget}+${solvedArea}=${totalCovered}≠41`;
+          return;
+        }
+
+        solution.sort((a, b) => {
+          const aMaxR = Math.max(...a.cells.map(([, r]) => r));
+          const bMaxR = Math.max(...b.cells.map(([, r]) => r));
+          if (aMaxR !== bMaxR) return bMaxR - aMaxR;
+          const aMinC = Math.min(...a.cells.map(([c]) => c));
+          const bMinC = Math.min(...b.cells.map(([c]) => c));
+          return aMinC - bMinC;
+        });
+
+        this._solution = solution;
+        this._hintIndex = 0;
+        this._solveMonth = month;
+        this._solveDay = day;
+
+        this.hintBtn.classList.remove('hidden');
+        this.statusEl.textContent = `Solved! ${solution.length} pieces to place. Tap 💡 Hint`;
+      } else {
+        this._solution = null;
+        this._hintIndex = 0;
+        this.hintBtn.classList.add('hidden');
+        this.statusEl.textContent = 'No solution. Tap cells to fix.';
+      }
+    }, 20);
   }
 
   _retake() {
