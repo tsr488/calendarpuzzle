@@ -140,31 +140,34 @@ class App {
       // 3. At least 1 piece is placed. The empty non-date cells need to be
       //    filled by the remaining (unplaced) pieces.
       //    Total piece area = 5*7 + 6*1 = 41 cells. Board has 43 cells, minus 2 date = 41.
-      //    So occupied cells = placed piece area, empty non-date = remaining piece area.
+      //    HARD RULE: occupied + solver solution = 41 cells exactly.
       
-      // Estimate how many pieces are placed from occupied cell count
       const occupiedCount = detection.occupied.size;
-      // Each piece covers ~5.125 cells on average (7×5 + 1×6 = 41 total across 8 pieces)
-      // Rough estimate of placed pieces
-      const estPlaced = Math.round(occupiedCount / 5.125);
-      const estRemaining = Math.max(1, 8 - estPlaced);
       
       // Get empty cells that aren't date cells (these need to be covered)
       const targetSet = new Set(targetCells.map(([c, r]) => cellKey(c, r)));
       const emptyNonDateCells = targetCells.filter(([c, r]) => !detection.occupied.has(cellKey(c, r)));
+      const emptyCount = emptyNonDateCells.length;
 
-      if (emptyNonDateCells.length === 0) {
+      // Validate: occupied (on target cells only) + empty must = 41
+      const occupiedOnTarget = targetCells.filter(([c, r]) => detection.occupied.has(cellKey(c, r))).length;
+
+      if (emptyCount === 0) {
         this._drawResultOverlay(detection, [], month, day);
         this.statusEl.textContent = `Puzzle complete! (${detectTime}ms)`;
         this.solving = false;
         return;
       }
 
-      this.statusEl.textContent = `${occupiedCount} covered, ~${estRemaining} pieces left. Solving...`;
+      // Estimate remaining piece count from empty cell count
+      // 7 pentominoes (5 cells) + 1 hexomino (6 cells) = 41
+      // If empty=41, all 8 pieces. If empty=36, 7 pieces (6×5+1×6 or 7×5+leftover won't work, etc.)
+      const estRemaining = Math.max(1, Math.min(8, Math.round(emptyCount / 5.125)));
+
+      this.statusEl.textContent = `${occupiedOnTarget} of 41 covered, ${emptyCount} empty, ~${estRemaining} pieces. Solving...`;
       const t1 = performance.now();
       
-      // Try solving with the detected empty region
-      // Use subsets of pieces by size to match the cell count
+      // Try solving — only accepts subsets whose area matches emptyCount exactly
       let solution = this._trySolveWithPieceSubsets(emptyNonDateCells, estRemaining);
       
       // If that fails, try flipping the most borderline cells
@@ -180,9 +183,8 @@ class App {
           if (flipped.has(cs.key)) { flipped.delete(cs.key); } else { flipped.add(cs.key); }
           
           const altEmpty = targetCells.filter(([c, r]) => !flipped.has(cellKey(c, r)));
-          const altEstPlaced = Math.round(flipped.size / 5.125);
-          const altEstRemaining = Math.max(1, 8 - altEstPlaced);
-          solution = this._trySolveWithPieceSubsets(altEmpty, altEstRemaining);
+          const altEst = Math.max(1, Math.min(8, Math.round(altEmpty.length / 5.125)));
+          solution = this._trySolveWithPieceSubsets(altEmpty, altEst);
         }
         
         // Try flipping 2 borderline cells
@@ -194,9 +196,8 @@ class App {
               if (flipped.has(cs.key)) { flipped.delete(cs.key); } else { flipped.add(cs.key); }
             }
             const altEmpty = targetCells.filter(([c, r]) => !flipped.has(cellKey(c, r)));
-            const altEstPlaced = Math.round(flipped.size / 5.125);
-            const altEstRemaining = Math.max(1, 8 - altEstPlaced);
-            solution = this._trySolveWithPieceSubsets(altEmpty, altEstRemaining);
+            const altEst = Math.max(1, Math.min(8, Math.round(altEmpty.length / 5.125)));
+            solution = this._trySolveWithPieceSubsets(altEmpty, altEst);
           }
         }
       }
@@ -207,11 +208,20 @@ class App {
       document.getElementById('debug-section').classList.remove('hidden');
 
       if (solution) {
-        this._drawResultOverlay(detection, solution, month, day);
-        this.statusEl.textContent = `Solved! ${solution.length} pieces placed (${totalTime}ms) — scroll down for debug`;
+        // Validate: solution cells + occupied on target must = 41
+        const solvedArea = solution.reduce((sum, p) => sum + p.cells.length, 0);
+        const totalCovered = occupiedOnTarget + solvedArea;
+        if (totalCovered !== 41) {
+          // Invalid — detection was wrong, don't show bogus solution
+          this._drawResultOverlay(detection, [], month, day);
+          this.statusEl.textContent = `Bad detection: ${occupiedOnTarget}+${solvedArea}=${totalCovered}≠41 (${totalTime}ms)`;
+        } else {
+          this._drawResultOverlay(detection, solution, month, day);
+          this.statusEl.textContent = `Solved! ${solution.length} pieces placed, ${8-solution.length} detected (${totalTime}ms)`;
+        }
       } else {
         this._drawResultOverlay(detection, [], month, day);
-        this.statusEl.textContent = `No solution: ${occupiedCount} occ, ${emptyNonDateCells.length} empty (${totalTime}ms)`;
+        this.statusEl.textContent = `No solution: ${occupiedOnTarget} occ + ${emptyCount} empty = ${occupiedOnTarget+emptyCount} (need 41) (${totalTime}ms)`;
       }
     } catch (err) {
       console.error('Detection error:', err);
@@ -232,12 +242,9 @@ class App {
     const cellCount = cells.length;
     if (cellCount === 0) return null;
 
-    // Piece sizes: 7 are size 5, 1 is size 6 (the P piece at index 7)
-    // Try exact piece count first, then +/- 1
-    for (const n of [estPieceCount, estPieceCount - 1, estPieceCount + 1]) {
-      if (n < 1 || n > 8) continue;
-
-      // Generate all combinations of n pieces from 8
+    // Only try piece subsets whose total area matches EXACTLY the empty cell count.
+    // No ±1 flexibility — wrong classification should fail, not produce wrong solutions.
+    for (let n = Math.max(1, estPieceCount - 1); n <= Math.min(8, estPieceCount + 1); n++) {
       const combos = this._combinations(PIECES, n);
       for (const subset of combos) {
         const totalArea = subset.reduce((sum, p) => sum + p.coords.length, 0);

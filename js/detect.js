@@ -233,31 +233,47 @@ function classifyCells(warped, cellPx, result) {
   result.cellScores = [];
   result.cellDebug = []; // detailed per-cell debug info
 
+  // First pass: compute raw scores
+  const rawScores = [];
   for (const stats of cellStats) {
-    const key = cellKey(stats.col, stats.row);
-
     // Primary: blue dominance (B - R) relative to threshold
     const blueScore = (stats.blueDominance - blueThreshold) / 40;
     // Secondary: saturation
     const satScore = (stats.sat - Math.max(satThreshold, 25)) / 50;
     // Blue hue confirmation
     const hueBonus = (stats.hue > 80 && stats.hue < 140) ? 0.3 : -0.2;
-    // Strong woody penalty
-    const woodyPenalty = (stats.blueDominance < -30 && stats.sat < 40) ? -1.5 : 0;
 
-    const score = blueScore * 0.6 + satScore * 0.3 + hueBonus * 0.1 + woodyPenalty;
+    const score = blueScore * 0.6 + satScore * 0.3 + hueBonus * 0.1;
+    rawScores.push(score);
+  }
 
-    result.cellScores.push({ col: stats.col, row: stats.row, score, key });
+  // Adaptive threshold on the composite scores themselves
+  const scoreThreshold = findOtsuThreshold(rawScores);
+
+  for (let i = 0; i < cellStats.length; i++) {
+    const stats = cellStats[i];
+    const key = cellKey(stats.col, stats.row);
+    const score = rawScores[i];
+
+    // Classify relative to Otsu threshold of scores (not fixed 0)
+    const isOccupied = score > scoreThreshold;
+
+    result.cellScores.push({ col: stats.col, row: stats.row, score: score - scoreThreshold, key });
     result.cellDebug.push({
       col: stats.col, row: stats.row, key,
       R: Math.round(stats.R), G: Math.round(stats.G), B: Math.round(stats.B),
       sat: Math.round(stats.sat), hue: Math.round(stats.hue),
       bd: Math.round(stats.blueDominance), score: score.toFixed(2),
-      cls: score > 0 ? 'P' : 'W', // P=piece, W=wood
+      thr: scoreThreshold.toFixed(2),
+      cls: isOccupied ? 'P' : 'W',
     });
 
-    if (score > 0) {
+    if (isOccupied) {
       result.occupied.add(key);
+    } else {
+      result.empty.add(key);
+    }
+  }
     } else {
       result.empty.add(key);
     }
@@ -445,7 +461,8 @@ export function drawDebug(debugCanvas, photoCanvas, corners, occupied, empty, ce
     // Title
     ctx.fillStyle = '#fff';
     ctx.font = 'bold 12px monospace';
-    ctx.fillText('Cell Classification (P=piece, W=wood, bd=B-R)', 10, gridTop + 14);
+    const thr = cellDebug[0]?.thr || '?';
+    ctx.fillText(`Cell Class (P=piece W=wood) thr:${thr}`, 10, gridTop + 14);
 
     for (const cd of cellDebug) {
       const gx = 10 + cd.col * cellW;
