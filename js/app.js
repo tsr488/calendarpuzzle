@@ -260,9 +260,6 @@ class App {
   /**
    * Try solving with available (unplaced) pieces.
    * First tries all available pieces. If area doesn't match, tries subsets.
-   * @param {number[][]} cells - cells to cover
-   * @param {object[]} available - pieces not yet placed on the board
-   * @returns {object[]|null}
    */
   _trySolveWithAvailable(cells, available) {
     const cellCount = cells.length;
@@ -276,7 +273,6 @@ class App {
     }
 
     // If piece detection missed some, try subsets of available pieces
-    // whose total area matches the empty cell count
     for (let n = available.length - 1; n >= 1; n--) {
       const combos = this._combinations(available, n);
       for (const subset of combos) {
@@ -342,11 +338,34 @@ class App {
       ctx.fill();
     };
 
-    // Draw detected occupied cells in gray
-    ctx.fillStyle = 'rgba(100, 100, 100, 0.45)';
+    // Draw detected occupied cells — white wash + diagonal hatching
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.3)';
     for (const key of detection.occupied) {
       const [c, r] = key.split(',').map(Number);
       if (isBoardCell(c, r)) fillCell(c, r, ctx);
+    }
+
+    // Diagonal hatch lines over occupied cells
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.5)';
+    ctx.lineWidth = 1.5;
+    for (const key of detection.occupied) {
+      const [c, r] = key.split(',').map(Number);
+      if (!isBoardCell(c, r)) continue;
+      const p0 = gridToPhoto(c, r);
+      const p1 = gridToPhoto(c + 1, r);
+      const p2 = gridToPhoto(c + 1, r - 1);
+      const p3 = gridToPhoto(c, r - 1);
+      // Draw 3 diagonal lines across the cell
+      ctx.beginPath();
+      for (const t of [0.25, 0.5, 0.75]) {
+        const startX = p0[0] + (p3[0] - p0[0]) * t;
+        const startY = p0[1] + (p3[1] - p0[1]) * t;
+        const endX = p1[0] + (p2[0] - p1[0]) * t;
+        const endY = p1[1] + (p2[1] - p1[1]) * t;
+        ctx.moveTo(startX, startY);
+        ctx.lineTo(endX, endY);
+      }
+      ctx.stroke();
     }
 
     // Draw solution pieces on top
@@ -375,16 +394,6 @@ class App {
           if (!cellSet.has(`${c+1},${r}`)) { ctx.moveTo(p1[0], p1[1]); ctx.lineTo(p2[0], p2[1]); }
           ctx.stroke();
         }
-
-        // Label piece name at centroid
-        const cx = placement.cells.reduce((s, [c]) => s + c, 0) / placement.cells.length;
-        const cr = placement.cells.reduce((s, [, r]) => s + r, 0) / placement.cells.length;
-        const center = gridToPhoto(cx + 0.5, cr + 0.5);
-        ctx.fillStyle = '#fff';
-        ctx.font = 'bold 14px system-ui';
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-        ctx.fillText(placement.name, center[0], center[1]);
       }
     }
   }

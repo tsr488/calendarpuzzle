@@ -95,6 +95,7 @@ export function solvePuzzle(regionCells, pieces = PIECES) {
   });
 
   // Solve with DLX
+  if (rows.length === 0) return null;
   const dlx = new DLX(rows);
   const found = dlx.solve();
 
