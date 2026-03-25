@@ -1,140 +1,150 @@
 ﻿// Automatic board detection and piece recognition using OpenCV.js
-// Strategy: board contour detection → homography → per-cell edge/texture analysis
+// Pieces: two shades of blue with white connecting lines
+// Board: light natural wood
 import { BOARD_CELLS, BOARD_COLS, BOARD_ROWS, isBoardCell, cellKey, PIECES } from './board.js';
 
-/**
- * Wait for OpenCV.js to load
- */
 export function waitForOpenCV() {
   return new Promise((resolve, reject) => {
     if (typeof cv !== 'undefined' && cv.Mat) { resolve(); return; }
-    // OpenCV.js sets cv as a global when loaded
     const check = setInterval(() => {
-      if (typeof cv !== 'undefined' && cv.Mat) {
-        clearInterval(check);
-        resolve();
-      }
+      if (typeof cv !== 'undefined' && cv.Mat) { clearInterval(check); resolve(); }
     }, 100);
     setTimeout(() => { clearInterval(check); reject(new Error('OpenCV.js load timeout')); }, 30000);
   });
 }
 
 /**
- * Detect the puzzle board in the image, classify each cell, and return results.
- * @param {HTMLCanvasElement} photoCanvas - canvas with the captured photo
- * @returns {{ occupied: Set<string>, empty: Set<string>, debugCanvas: HTMLCanvasElement|null, boardContour: any, warpedMat: any }}
+ * Detect the puzzle board and classify cells.
+ * @param {HTMLCanvasElement} photoCanvas
+ * @returns {{ occupied: Set<string>, empty: Set<string>, corners: number[][]|null }}
  */
 export function detectBoard(photoCanvas) {
   const src = cv.imread(photoCanvas);
   const result = { occupied: new Set(), empty: new Set(), corners: null };
 
   try {
-    // 1. Find the board quadrilateral
     const corners = findBoardCorners(src);
     if (!corners) {
-      throw new Error('Could not detect board — try better lighting or angle');
+      throw new Error('Could not detect board — try a clearer photo with the full board visible');
     }
     result.corners = corners;
 
-    // 2. Warp to top-down view (known grid dimensions)
-    const cellPx = 60; // pixels per cell in warped image
+    const cellPx = 60;
     const warpW = BOARD_COLS * cellPx;
     const warpH = BOARD_ROWS * cellPx;
     const warped = warpToGrid(src, corners, warpW, warpH);
 
-    // 3. Classify each cell as occupied or empty
     classifyCells(warped, cellPx, result);
-
     warped.delete();
   } finally {
     src.delete();
   }
-
   return result;
 }
 
 /**
- * Find the 4 corners of the puzzle board using contour detection.
- * Returns [[x,y], [x,y], [x,y], [x,y]] in order: TL, TR, BR, BL — or null.
+ * Find board corners using multiple strategies:
+ * 1. Try contour-based quad detection with varying parameters
+ * 2. Fallback to largest contour's minAreaRect
+ * 3. Fallback to convex hull of largest contour → best-fit quad
  */
 function findBoardCorners(src) {
   const gray = new cv.Mat();
   const blurred = new cv.Mat();
-  const edges = new cv.Mat();
-
   cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
   cv.GaussianBlur(gray, blurred, new cv.Size(5, 5), 0);
-  cv.Canny(blurred, edges, 50, 150);
 
-  // Dilate to close gaps
-  const kernel = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(3, 3));
-  cv.dilate(edges, edges, kernel);
-
-  const contours = new cv.MatVector();
-  const hierarchy = new cv.Mat();
-  cv.findContours(edges, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
-
-  // Find the largest quadrilateral contour
-  let bestContour = null;
-  let bestArea = 0;
   const imgArea = src.rows * src.cols;
-
-  for (let i = 0; i < contours.size(); i++) {
-    const contour = contours.get(i);
-    const area = cv.contourArea(contour);
-    // Board should be a significant portion of the image
-    if (area < imgArea * 0.1) continue;
-
-    const peri = cv.arcLength(contour, true);
-    const approx = new cv.Mat();
-    cv.approxPolyDP(contour, approx, 0.02 * peri, true);
-
-    if (approx.rows === 4 && area > bestArea) {
-      bestArea = area;
-      if (bestContour) bestContour.delete();
-      bestContour = approx;
-    } else {
-      approx.delete();
-    }
-  }
-
   let corners = null;
-  if (bestContour) {
-    corners = orderCorners(bestContour);
-    bestContour.delete();
+
+  // Strategy 1: Try different Canny thresholds and epsilon values
+  const cannyParams = [[30, 100], [50, 150], [20, 80], [70, 200]];
+  const epsilons = [0.02, 0.03, 0.04, 0.05, 0.06];
+
+  for (const [lo, hi] of cannyParams) {
+    if (corners) break;
+    const edges = new cv.Mat();
+    cv.Canny(blurred, edges, lo, hi);
+
+    const kernel = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(3, 3));
+    cv.dilate(edges, edges, kernel);
+    kernel.delete();
+
+    const contours = new cv.MatVector();
+    const hierarchy = new cv.Mat();
+    cv.findContours(edges, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+
+    // Sort contours by area descending
+    const indexed = [];
+    for (let i = 0; i < contours.size(); i++) {
+      indexed.push({ idx: i, area: cv.contourArea(contours.get(i)) });
+    }
+    indexed.sort((a, b) => b.area - a.area);
+
+    for (const { idx, area } of indexed) {
+      if (corners) break;
+      if (area < imgArea * 0.05) break; // too small
+
+      const contour = contours.get(idx);
+      const peri = cv.arcLength(contour, true);
+
+      // Try different epsilon values for polygon approximation
+      for (const eps of epsilons) {
+        const approx = new cv.Mat();
+        cv.approxPolyDP(contour, approx, eps * peri, true);
+
+        if (approx.rows === 4 && cv.isContourConvex(approx)) {
+          corners = orderCorners4(approx);
+          approx.delete();
+          break;
+        }
+        approx.delete();
+      }
+
+      // Strategy 2: If no quad found, use minAreaRect on the contour
+      if (!corners && area > imgArea * 0.05) {
+        corners = cornersFromMinAreaRect(contour);
+      }
+    }
+
+    edges.delete(); contours.delete(); hierarchy.delete();
   }
 
-  gray.delete(); blurred.delete(); edges.delete(); kernel.delete();
-  contours.delete(); hierarchy.delete();
-
+  gray.delete(); blurred.delete();
   return corners;
 }
 
 /**
- * Order 4 points as [TL, TR, BR, BL]
+ * Extract 4 ordered corners from a cv.RotatedRect via minAreaRect
  */
-function orderCorners(mat) {
+function cornersFromMinAreaRect(contour) {
+  const rect = cv.minAreaRect(contour);
+  const pts = cv.RotatedRect.points(rect);
+  // pts is [{x,y}, {x,y}, {x,y}, {x,y}]
+  const arr = pts.map(p => [Math.round(p.x), Math.round(p.y)]);
+  return orderCornersArray(arr);
+}
+
+/**
+ * Order 4 points from a cv.Mat as [TL, TR, BR, BL]
+ */
+function orderCorners4(mat) {
   const pts = [];
   for (let i = 0; i < 4; i++) {
     pts.push([mat.data32S[i * 2], mat.data32S[i * 2 + 1]]);
   }
-
-  // Sort by sum (x+y): smallest = TL, largest = BR
-  // Sort by diff (x-y): smallest = BL, largest = TR
-  const sumSorted = [...pts].sort((a, b) => (a[0] + a[1]) - (b[0] + b[1]));
-  const diffSorted = [...pts].sort((a, b) => (a[0] - a[1]) - (b[0] - b[1]));
-
-  const tl = sumSorted[0];
-  const br = sumSorted[3];
-  const bl = diffSorted[0];
-  const tr = diffSorted[3];
-
-  return [tl, tr, br, bl];
+  return orderCornersArray(pts);
 }
 
 /**
- * Warp the source image to a top-down rectangular view of the grid
+ * Order 4 [x,y] points as [TL, TR, BR, BL]
  */
+function orderCornersArray(pts) {
+  const sumSorted = [...pts].sort((a, b) => (a[0] + a[1]) - (b[0] + b[1]));
+  const diffSorted = [...pts].sort((a, b) => (a[0] - a[1]) - (b[0] - b[1]));
+  return [sumSorted[0], diffSorted[3], sumSorted[3], diffSorted[0]];
+}
+
 function warpToGrid(src, corners, dstW, dstH) {
   const [tl, tr, br, bl] = corners;
   const srcPts = cv.matFromArray(4, 1, cv.CV_32FC2, [
@@ -146,144 +156,123 @@ function warpToGrid(src, corners, dstW, dstH) {
   const M = cv.getPerspectiveTransform(srcPts, dstPts);
   const warped = new cv.Mat();
   cv.warpPerspective(src, warped, M, new cv.Size(dstW, dstH));
-
   srcPts.delete(); dstPts.delete(); M.delete();
   return warped;
 }
 
 /**
- * Classify each cell in the warped top-down image as occupied or empty.
+ * Classify cells as occupied (piece) or empty (wood).
  * 
- * Strategy: The bare wooden board has a relatively uniform light color with 
- * engraved/printed text. Pieces have more complex textures, gradients, and 
- * different colors. We use a combination of:
- * - Mean color distance from "wood" reference color
- * - Edge density (Canny edges per cell)
- * - Color variance within the cell
+ * The puzzle has BLUE pieces on LIGHT WOOD.
+ * Key signals:
+ * - HSV Saturation: blue pieces have much higher saturation than bare wood
+ * - HSV Hue: blue pieces cluster around hue 90-130 (OpenCV scale 0-180)
+ * - Wood is warm/low-saturation (hue ~15-30, low sat)
+ * - White connecting lines on pieces add some noise but cells are mostly blue
  */
 function classifyCells(warped, cellPx, result) {
-  const gray = new cv.Mat();
   const hsv = new cv.Mat();
-  cv.cvtColor(warped, gray, cv.COLOR_RGBA2GRAY);
-  cv.cvtColor(warped, hsv, cv.COLOR_RGBA2RGB);
-  const hsvMat = new cv.Mat();
-  cv.cvtColor(hsv, hsvMat, cv.COLOR_RGB2HSV);
+  const rgb = new cv.Mat();
+  cv.cvtColor(warped, rgb, cv.COLOR_RGBA2RGB);
+  cv.cvtColor(rgb, hsv, cv.COLOR_RGB2HSV);
 
-  // Compute Canny edges on the warped image
-  const edges = new cv.Mat();
-  const blurred = new cv.Mat();
-  cv.GaussianBlur(gray, blurred, new cv.Size(3, 3), 0);
-  cv.Canny(blurred, edges, 30, 100);
-
-  // First pass: collect stats from all valid cells to determine thresholds adaptively
   const cellStats = [];
 
   for (const [c, r] of BOARD_CELLS) {
     const x = c * cellPx;
     const y = (BOARD_ROWS - 1 - r) * cellPx;
-    const margin = Math.floor(cellPx * 0.15); // skip edges of cell to avoid borders
+    const margin = Math.floor(cellPx * 0.2);
     const roi = new cv.Rect(x + margin, y + margin, cellPx - margin * 2, cellPx - margin * 2);
 
-    // Edge density
-    const edgeRoi = edges.roi(roi);
-    const edgeMean = cv.mean(edgeRoi);
-    const edgeDensity = edgeMean[0] / 255.0;
-    edgeRoi.delete();
+    const hsvRoi = hsv.roi(roi);
 
-    // Color stats in HSV
-    const hsvRoi = hsvMat.roi(roi);
-    const mean = cv.mean(hsvRoi);
-    const hMean = mean[0], sMean = mean[1], vMean = mean[2];
-
-    // Compute color variance (saturation is key — wood is low saturation, pieces are higher)
+    // Split channels
     const channels = new cv.MatVector();
     cv.split(hsvRoi, channels);
-    const sMat = channels.get(1);
-    const sMeanScalar = cv.mean(sMat);
-    const sStd = new cv.Mat();
-    const sMeanMat = new cv.Mat();
-    cv.meanStdDev(sMat, sMeanMat, sStd);
-    const satStdDev = sStd.doubleAt(0, 0);
+    const hCh = channels.get(0);
+    const sCh = channels.get(1);
+    const vCh = channels.get(2);
 
-    hsvRoi.delete();
-    for (let ch = 0; ch < channels.size(); ch++) channels.get(ch).delete();
-    channels.delete();
-    sStd.delete(); sMeanMat.delete();
+    // Get mean and stddev of each channel
+    const hMean = new cv.Mat(), hStd = new cv.Mat();
+    const sMean = new cv.Mat(), sStd = new cv.Mat();
+    const vMean = new cv.Mat(), vStd = new cv.Mat();
+    cv.meanStdDev(hCh, hMean, hStd);
+    cv.meanStdDev(sCh, sMean, sStd);
+    cv.meanStdDev(vCh, vMean, vStd);
 
     cellStats.push({
       col: c, row: r,
-      edgeDensity,
-      saturation: sMean,
-      satStdDev,
-      value: vMean,
-      hue: hMean
+      hue: hMean.doubleAt(0, 0),
+      sat: sMean.doubleAt(0, 0),
+      val: vMean.doubleAt(0, 0),
+      satStd: sStd.doubleAt(0, 0),
+      hueStd: hStd.doubleAt(0, 0),
     });
+
+    hsvRoi.delete();
+    hCh.delete(); sCh.delete(); vCh.delete(); channels.delete();
+    hMean.delete(); hStd.delete(); sMean.delete(); sStd.delete(); vMean.delete(); vStd.delete();
   }
 
-  // Adaptive thresholding: find the natural split in saturation
-  // Wood cells tend to have low saturation; piece cells have higher saturation
-  const saturations = cellStats.map(s => s.saturation).sort((a, b) => a - b);
-  const edgeDensities = cellStats.map(s => s.edgeDensity).sort((a, b) => a - b);
+  // Adaptive classification using K-means-like split on saturation
+  // Blue pieces have significantly higher saturation than wood
+  const sats = cellStats.map(s => s.sat);
+  const satThreshold = findOtsuThreshold(sats);
 
-  // Use Otsu-like split: find threshold that best separates two clusters
-  const satThreshold = findOtsuThreshold(saturations);
-  const edgeThreshold = findOtsuThreshold(edgeDensities);
-
-  // Classify using combined score
+  // Also look at hue: blue is roughly 85-135 in OpenCV HSV (0-180 scale)
+  // Wood/empty is more like 10-35 (warm/yellow tones)
   for (const stats of cellStats) {
     const key = cellKey(stats.col, stats.row);
-    // Score: higher = more likely to be a piece
-    // Saturation is the strongest signal (pieces are colored, wood is not)
-    // Edge density is secondary (pieces have texture)
-    const satScore = stats.saturation > satThreshold ? 1 : 0;
-    const edgeScore = stats.edgeDensity > edgeThreshold ? 0.5 : 0;
-    const score = satScore + edgeScore;
 
-    if (score >= 0.5) {
+    // Primary signal: saturation
+    const highSat = stats.sat > Math.max(satThreshold, 30);
+    // Secondary signal: hue in blue range (broad range to catch light & dark blue)
+    const blueHue = stats.hue > 80 && stats.hue < 140;
+    // Tertiary: wood tends to have hue < 40 and very low saturation
+    const looksWoody = stats.hue < 45 && stats.sat < 50;
+
+    if (looksWoody) {
+      result.empty.add(key);
+    } else if (highSat && blueHue) {
+      result.occupied.add(key);
+    } else if (highSat) {
+      // High saturation but not clearly blue — still likely a piece
       result.occupied.add(key);
     } else {
       result.empty.add(key);
     }
   }
 
-  gray.delete(); hsv.delete(); hsvMat.delete(); edges.delete(); blurred.delete();
+  hsv.delete(); rgb.delete();
 }
 
-/**
- * Simple Otsu-style threshold finder for an array of sorted values.
- * Returns the value that best separates the data into two groups.
- */
-function findOtsuThreshold(sorted) {
+function findOtsuThreshold(values) {
+  const sorted = [...values].sort((a, b) => a - b);
   const n = sorted.length;
   if (n < 2) return sorted[0] || 0;
 
   let bestThresh = sorted[0];
-  let bestVariance = Infinity;
+  let bestVar = Infinity;
 
   for (let i = 1; i < n - 1; i++) {
     const left = sorted.slice(0, i);
     const right = sorted.slice(i);
-    const leftMean = left.reduce((a, b) => a + b, 0) / left.length;
-    const rightMean = right.reduce((a, b) => a + b, 0) / right.length;
-    const leftVar = left.reduce((a, b) => a + (b - leftMean) ** 2, 0) / left.length;
-    const rightVar = right.reduce((a, b) => a + (b - rightMean) ** 2, 0) / right.length;
-    const withinVar = (left.length * leftVar + right.length * rightVar) / n;
-
-    if (withinVar < bestVariance) {
-      bestVariance = withinVar;
-      bestThresh = sorted[i];
-    }
+    const lm = left.reduce((a, b) => a + b, 0) / left.length;
+    const rm = right.reduce((a, b) => a + b, 0) / right.length;
+    const lv = left.reduce((a, b) => a + (b - lm) ** 2, 0) / left.length;
+    const rv = right.reduce((a, b) => a + (b - rm) ** 2, 0) / right.length;
+    const wv = (left.length * lv + right.length * rv) / n;
+    if (wv < bestVar) { bestVar = wv; bestThresh = sorted[i]; }
   }
-
   return bestThresh;
 }
 
 /**
- * Given detected occupied/empty cells, figure out which pieces are placed
- * by grouping occupied cells into connected components and matching shapes.
+ * Identify placed pieces by grouping occupied cells into connected components
+ * and matching against known piece shapes.
  */
 export function identifyPlacedPieces(occupied) {
-  // Group into connected components
   const visited = new Set();
   const components = [];
 
@@ -297,7 +286,6 @@ export function identifyPlacedPieces(occupied) {
       visited.add(k);
       component.push(k);
       const [c, r] = k.split(',').map(Number);
-      // Check 4-connected neighbors
       for (const [dc, dr] of [[0,1],[0,-1],[1,0],[-1,0]]) {
         const nk = cellKey(c + dc, r + dr);
         if (occupied.has(nk) && !visited.has(nk)) stack.push(nk);
@@ -306,31 +294,22 @@ export function identifyPlacedPieces(occupied) {
     components.push(component);
   }
 
-  // Try to match each component to a known piece shape
   const usedPieceIndices = new Set();
   for (const comp of components) {
     const coords = comp.map(k => k.split(',').map(Number));
     const matchIdx = matchPieceShape(coords, usedPieceIndices);
     if (matchIdx !== -1) usedPieceIndices.add(matchIdx);
   }
-
   return usedPieceIndices;
 }
 
-/**
- * Match a set of cell coordinates to a known piece shape.
- * Returns piece index or -1 if no match.
- */
 function matchPieceShape(coords, excludeIndices) {
-  // Normalize the coordinates
   const norm = normalizeCoords(coords);
   const key = coordsKey(norm);
 
   for (let i = 0; i < PIECES.length; i++) {
     if (excludeIndices.has(i)) continue;
-    const piece = PIECES[i];
-    // Generate all orientations (4 rotations × 2 reflections)
-    const orientations = generateAllOrientations(piece.coords);
+    const orientations = generateAllOrientations(PIECES[i].coords);
     for (const orient of orientations) {
       if (coordsKey(orient) === key) return i;
     }
@@ -354,43 +333,56 @@ function generateAllOrientations(coords) {
   const results = [];
   const seen = new Set();
   let current = coords.map(([c, r]) => [c, r]);
-
   for (let flip = 0; flip < 2; flip++) {
     for (let rot = 0; rot < 4; rot++) {
       const norm = normalizeCoords(current);
       const k = coordsKey(norm);
       if (!seen.has(k)) { seen.add(k); results.push(norm); }
-      current = current.map(([c, r]) => [-r, c]); // rotate 90
+      current = current.map(([c, r]) => [-r, c]);
     }
-    current = coords.map(([c, r]) => [-c, r]); // reflect
+    current = coords.map(([c, r]) => [-c, r]);
   }
   return results;
 }
 
 /**
- * Draw detection debug visualization on a canvas
+ * Draw debug visualization — board corners + cell classification
  */
 export function drawDebug(debugCanvas, photoCanvas, corners, occupied, empty) {
   const ctx = debugCanvas.getContext('2d');
+  const dpr = window.devicePixelRatio || 1;
   debugCanvas.width = photoCanvas.width;
   debugCanvas.height = photoCanvas.height;
+  debugCanvas.style.width = (photoCanvas.width / dpr) + 'px';
+  debugCanvas.style.height = (photoCanvas.height / dpr) + 'px';
   ctx.drawImage(photoCanvas, 0, 0);
 
-  // Draw detected corners
   if (corners) {
     ctx.strokeStyle = '#0f0';
-    ctx.lineWidth = 3;
+    ctx.lineWidth = 4;
     ctx.beginPath();
     ctx.moveTo(corners[0][0], corners[0][1]);
     for (let i = 1; i < 4; i++) ctx.lineTo(corners[i][0], corners[i][1]);
     ctx.closePath();
     ctx.stroke();
 
-    for (const [x, y] of corners) {
+    // Label corners
+    const labels = ['TL', 'TR', 'BR', 'BL'];
+    for (let i = 0; i < 4; i++) {
       ctx.fillStyle = '#f00';
       ctx.beginPath();
-      ctx.arc(x, y, 8, 0, Math.PI * 2);
+      ctx.arc(corners[i][0], corners[i][1], 10, 0, Math.PI * 2);
       ctx.fill();
+      ctx.fillStyle = '#fff';
+      ctx.font = 'bold 14px system-ui';
+      ctx.fillText(labels[i], corners[i][0] + 14, corners[i][1] + 5);
     }
   }
+
+  // Show classification counts
+  ctx.fillStyle = 'rgba(0,0,0,0.7)';
+  ctx.fillRect(0, 0, 250, 30);
+  ctx.fillStyle = '#0f0';
+  ctx.font = '14px monospace';
+  ctx.fillText(`occupied: ${occupied.size}  empty: ${empty.size}`, 10, 20);
 }

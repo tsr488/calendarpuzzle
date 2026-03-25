@@ -96,18 +96,29 @@ class App {
 
   _detectAndSolve() {
     const t0 = performance.now();
+    let detection = null;
 
     try {
       // 1. Detect board and classify cells
-      const detection = detectBoard(this.photoCanvas);
-      const detectTime = (performance.now() - t0).toFixed(0);
+      detection = detectBoard(this.photoCanvas);
+    } catch (err) {
+      console.error('Detection error:', err);
+      // Still try to draw debug with whatever we have
+      drawDebug(this.debugCanvas, this.photoCanvas, null, new Set(), new Set());
+      this.statusEl.textContent = err.message;
+      this.solving = false;
+      // Show debug on failure to help diagnose
+      document.getElementById('debug-section').classList.remove('hidden');
+      return;
+    }
 
-      // Debug visualization
-      drawDebug(this.debugCanvas, this.photoCanvas, detection.corners, detection.occupied, detection.empty);
+    const detectTime = (performance.now() - t0).toFixed(0);
 
-      // 2. Determine what needs solving
-      // The empty cells (uncovered by pieces) include the date cells + any unplaced area
-      // For now, use today's date to know which 2 cells SHOULD be empty
+    // Debug visualization
+    drawDebug(this.debugCanvas, this.photoCanvas, detection.corners, detection.occupied, detection.empty);
+
+    try {
+      // 2. Use today's date to know which 2 cells SHOULD be empty
       const today = new Date();
       const month = today.getMonth() + 1;
       const day = today.getDate();
