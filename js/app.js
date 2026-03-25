@@ -2,7 +2,7 @@
 import { PIECES, BOARD_CELLS, getCellsToCover, cellKey, BOARD_COLS, BOARD_ROWS, getCellLabel } from './board.js';
 import { solvePuzzle } from './solver.js';
 import { Camera } from './camera.js';
-import { waitForOpenCV, detectBoard, identifyPlacedPieces, drawDebug } from './detect.js';
+import { waitForOpenCV, detectBoard, reclassifyWithOffset, identifyPlacedPieces, drawDebug } from './detect.js';
 import { APP_VERSION } from './version.js';
 
 class App {
@@ -10,11 +10,40 @@ class App {
     this.camera = null;
     this.cvReady = false;
     this.solving = false;
+    this.solveTomorrow = false;
+  }
+
+  _getTargetDate() {
+    const d = new Date();
+    if (this.solveTomorrow) d.setDate(d.getDate() + 1);
+    return d;
+  }
+
+  _updateDateLabel() {
+    const d = this._getTargetDate();
+    document.getElementById('date-label').textContent = d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
   }
 
   async init() {
     // Version display
     document.getElementById('version-label').textContent = 'v' + APP_VERSION;
+
+    // Date toggle
+    const todayBtn = document.getElementById('date-today');
+    const tomorrowBtn = document.getElementById('date-tomorrow');
+    todayBtn.addEventListener('click', () => {
+      this.solveTomorrow = false;
+      todayBtn.classList.add('active');
+      tomorrowBtn.classList.remove('active');
+      this._updateDateLabel();
+    });
+    tomorrowBtn.addEventListener('click', () => {
+      this.solveTomorrow = true;
+      tomorrowBtn.classList.add('active');
+      todayBtn.classList.remove('active');
+      this._updateDateLabel();
+    });
+    this._updateDateLabel();
 
     const videoEl = document.getElementById('camera-video');
     const photoCanvas = document.getElementById('photo-canvas');
@@ -114,21 +143,16 @@ class App {
       drawDebug(this.debugCanvas, this.photoCanvas, null, new Set(), new Set());
       this.statusEl.textContent = err.message;
       this.solving = false;
-      // Show debug on failure to help diagnose
-      document.getElementById('debug-section').classList.remove('hidden');
       return;
     }
 
     const detectTime = (performance.now() - t0).toFixed(0);
 
-    // Debug visualization
-    drawDebug(this.debugCanvas, this.photoCanvas, detection.corners, detection.occupied, detection.empty, detection.cellDebug);
-
     try {
       // 2. Use today's date
-      const today = new Date();
-      const month = today.getMonth() + 1;
-      const day = today.getDate();
+      const target = this._getTargetDate();
+      const month = target.getMonth() + 1;
+      const day = target.getDate();
       const targetCells = getCellsToCover(month, day);
 
       if (!targetCells) {
@@ -137,92 +161,65 @@ class App {
         return;
       }
 
-      // 3. At least 1 piece is placed. The empty non-date cells need to be
-      //    filled by the remaining (unplaced) pieces.
-      //    Total piece area = 5*7 + 6*1 = 41 cells. Board has 43 cells, minus 2 date = 41.
+      // 3. Try solving with the default detection, then adjust threshold if needed.
       //    HARD RULE: occupied + solver solution = 41 cells exactly.
       
-      const occupiedCount = detection.occupied.size;
-      
-      // Identify which pieces are already on the board
-      const usedPieceIndices = identifyPlacedPieces(detection.occupied);
-      const availablePieces = PIECES.filter((_, i) => !usedPieceIndices.has(i));
-      
-      // Get empty cells that aren't date cells (these need to be covered)
       const targetSet = new Set(targetCells.map(([c, r]) => cellKey(c, r)));
-      const emptyNonDateCells = targetCells.filter(([c, r]) => !detection.occupied.has(cellKey(c, r)));
-      const emptyCount = emptyNonDateCells.length;
-
-      // Validate: occupied (on target cells only) + empty must = 41
-      const occupiedOnTarget = targetCells.filter(([c, r]) => detection.occupied.has(cellKey(c, r))).length;
-
-      if (emptyCount === 0) {
-        this._drawResultOverlay(detection, [], month, day);
-        this.statusEl.textContent = `Puzzle complete! (${detectTime}ms)`;
-        this.solving = false;
-        return;
-      }
-
-      this.statusEl.textContent = `${occupiedOnTarget} covered, ${emptyCount} empty, ${usedPieceIndices.size} pieces detected, ${availablePieces.length} remaining. Solving...`;
-      const t1 = performance.now();
       
-      // Try solving with only the available (unplaced) pieces
-      let solution = this._trySolveWithAvailable(emptyNonDateCells, availablePieces);
+      let solution = null;
+      let bestDetection = detection;
+
+      // Try default threshold first, then nudge in both directions
+      const offsets = [0, -0.02, 0.02, -0.05, 0.05, -0.08, 0.08, -0.12, 0.12];
       
-      // If that fails, try flipping the most borderline cells
-      if (!solution && detection.cellScores) {
-        const borderline = detection.cellScores
-          .filter(cs => targetSet.has(cs.key))
-          .slice(0, 6);
-        
-        // Try flipping 1 borderline cell at a time
-        for (let i = 0; i < borderline.length && !solution; i++) {
-          const flipped = new Set(detection.occupied);
-          const cs = borderline[i];
-          if (flipped.has(cs.key)) { flipped.delete(cs.key); } else { flipped.add(cs.key); }
-          
-          const altEmpty = targetCells.filter(([c, r]) => !flipped.has(cellKey(c, r)));
-          const altUsed = identifyPlacedPieces(flipped);
-          const altAvail = PIECES.filter((_, idx) => !altUsed.has(idx));
-          solution = this._trySolveWithAvailable(altEmpty, altAvail);
+      for (const offset of offsets) {
+        if (solution) break;
+
+        let det = detection;
+        if (offset !== 0 && detection.cellStats) {
+          det = reclassifyWithOffset(detection.cellStats, offset);
+          det.corners = detection.corners;
+          det.cellStats = detection.cellStats;
         }
-        
-        // Try flipping 2 borderline cells
-        for (let i = 0; i < borderline.length && !solution; i++) {
-          for (let j = i + 1; j < borderline.length && !solution; j++) {
-            const flipped = new Set(detection.occupied);
-            for (const idx of [i, j]) {
-              const cs = borderline[idx];
-              if (flipped.has(cs.key)) { flipped.delete(cs.key); } else { flipped.add(cs.key); }
-            }
-            const altEmpty = targetCells.filter(([c, r]) => !flipped.has(cellKey(c, r)));
-            const altUsed = identifyPlacedPieces(flipped);
-            const altAvail = PIECES.filter((_, idx) => !altUsed.has(idx));
-            solution = this._trySolveWithAvailable(altEmpty, altAvail);
-          }
+
+        const emptyNonDateCells = targetCells.filter(([c, r]) => !det.occupied.has(cellKey(c, r)));
+        if (emptyNonDateCells.length === 0) continue;
+
+        const usedPieceIndices = identifyPlacedPieces(det.occupied);
+        const availablePieces = PIECES.filter((_, i) => !usedPieceIndices.has(i));
+
+        this.statusEl.textContent = `offset ${offset}: ${det.occupied.size} occ, ${availablePieces.length} avail. Solving...`;
+
+        solution = this._trySolveWithAvailable(emptyNonDateCells, availablePieces);
+        if (solution) {
+          bestDetection = det;
+          break;
         }
       }
+
+      detection = bestDetection;
 
       const totalTime = (performance.now() - t0).toFixed(0);
 
-      // Always show debug section so user can verify classification
-      document.getElementById('debug-section').classList.remove('hidden');
+      // Populate debug canvas (hidden until long-press on status)
+      drawDebug(this.debugCanvas, this.photoCanvas, detection.corners, detection.occupied, detection.empty, detection.cellDebug);
 
       if (solution) {
-        // Validate: solution cells + occupied on target must = 41
         const solvedArea = solution.reduce((sum, p) => sum + p.cells.length, 0);
-        const totalCovered = occupiedOnTarget + solvedArea;
+        const occOnTarget = targetCells.filter(([c, r]) => detection.occupied.has(cellKey(c, r))).length;
+        const totalCovered = occOnTarget + solvedArea;
         if (totalCovered !== 41) {
-          // Invalid — detection was wrong, don't show bogus solution
           this._drawResultOverlay(detection, [], month, day);
-          this.statusEl.textContent = `Bad detection: ${occupiedOnTarget}+${solvedArea}=${totalCovered}≠41 (${totalTime}ms)`;
+          this.statusEl.textContent = `Bad detection: ${occOnTarget}+${solvedArea}=${totalCovered}≠41 (${totalTime}ms)`;
         } else {
           this._drawResultOverlay(detection, solution, month, day);
           this.statusEl.textContent = `Solved! ${solution.length} pieces placed, ${8-solution.length} detected (${totalTime}ms)`;
         }
       } else {
+        const occOnTarget = targetCells.filter(([c, r]) => detection.occupied.has(cellKey(c, r))).length;
+        const emptyCount = 41 - occOnTarget;
         this._drawResultOverlay(detection, [], month, day);
-        this.statusEl.textContent = `No solution: ${occupiedOnTarget} occ + ${emptyCount} empty = ${occupiedOnTarget+emptyCount} (need 41) (${totalTime}ms)`;
+        this.statusEl.textContent = `No solution found after ${offsets.length} threshold attempts (${totalTime}ms)`;
       }
     } catch (err) {
       console.error('Detection error:', err);
@@ -284,89 +281,97 @@ class App {
   }
 
   /**
-   * Draw the solution overlay on the result canvas
+   * Draw the solution overlay directly on the captured photo.
+   * Uses the detected corners to map grid cells back to photo coordinates.
    */
   _drawResultOverlay(detection, solution, month, day) {
     const canvas = this.resultCanvas;
     canvas.classList.remove('hidden');
 
-    const cellPx = 48;
-    const offsetX = 10;
-    const offsetY = 10;
-    const w = BOARD_COLS * cellPx + offsetX * 2;
-    const h = BOARD_ROWS * cellPx + offsetY * 2;
     const dpr = window.devicePixelRatio || 1;
-    canvas.width = w * dpr;
-    canvas.height = h * dpr;
-    canvas.style.width = w + 'px';
-    canvas.style.height = h + 'px';
+    const photoW = this.photoCanvas.width;
+    const photoH = this.photoCanvas.height;
+
+    canvas.width = photoW;
+    canvas.height = photoH;
+    canvas.style.width = (photoW / dpr) + 'px';
+    canvas.style.height = (photoH / dpr) + 'px';
     const ctx = canvas.getContext('2d');
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
-    const p = 2;
+    // Draw the photo as background
+    ctx.drawImage(this.photoCanvas, 0, 0);
 
-    // Draw all board cells
-    for (const [c, r] of BOARD_CELLS) {
-      const x = offsetX + c * cellPx;
-      const y = offsetY + (BOARD_ROWS - 1 - r) * cellPx;
-      const key = cellKey(c, r);
+    if (!detection.corners || !solution || solution.length === 0) return;
 
-      const isOccupied = detection.occupied.has(key);
+    const [tl, tr, br, bl] = detection.corners;
 
-      // Check if this is a "date" cell (should be visible)
-      const targetCells = getCellsToCover(month, day);
-      const isDateCell = !targetCells.some(([tc, tr]) => tc === c && tr === r) 
-        && BOARD_CELLS.some(([bc, br]) => bc === c && br === r);
+    // Map a grid cell (col, row) to photo pixel coordinates.
+    // Uses bilinear interpolation between the 4 corners.
+    const gridToPhoto = (col, row) => {
+      // Normalize to 0-1 within the grid
+      const u = col / BOARD_COLS;
+      const v = (BOARD_ROWS - 1 - row) / BOARD_ROWS;
 
-      if (isDateCell) {
-        ctx.fillStyle = '#fff3cd';
-      } else if (isOccupied) {
-        ctx.fillStyle = '#7f8c8d88'; // gray = detected as occupied
-      } else {
-        ctx.fillStyle = '#f5f0e8';
+      // Bilinear interpolation
+      const x = (1 - u) * (1 - v) * tl[0] + u * (1 - v) * tr[0] +
+                u * v * br[0] + (1 - u) * v * bl[0];
+      const y = (1 - u) * (1 - v) * tl[1] + u * (1 - v) * tr[1] +
+                u * v * br[1] + (1 - u) * v * bl[1];
+      return [x, y];
+    };
+
+    // Draw each solution piece
+    for (const placement of solution) {
+      ctx.fillStyle = placement.color + '99'; // semi-transparent
+      ctx.strokeStyle = placement.color;
+      ctx.lineWidth = 3;
+
+      for (const [c, r] of placement.cells) {
+        // Get the 4 corners of this cell in photo space
+        const p0 = gridToPhoto(c, r);           // top-left of cell
+        const p1 = gridToPhoto(c + 1, r);       // top-right
+        const p2 = gridToPhoto(c + 1, r - 1);   // bottom-right (row-1 = down visually)
+        const p3 = gridToPhoto(c, r - 1);        // bottom-left
+
+        // Fill cell
+        ctx.beginPath();
+        ctx.moveTo(p0[0], p0[1]);
+        ctx.lineTo(p1[0], p1[1]);
+        ctx.lineTo(p2[0], p2[1]);
+        ctx.lineTo(p3[0], p3[1]);
+        ctx.closePath();
+        ctx.fill();
       }
 
-      ctx.strokeStyle = '#c4b998';
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      ctx.roundRect(x + p, y + p, cellPx - p * 2, cellPx - p * 2, 4);
-      ctx.fill();
-      ctx.stroke();
+      // Draw piece borders (edges not shared with same piece)
+      const cellSet = new Set(placement.cells.map(([c, r]) => `${c},${r}`));
+      for (const [c, r] of placement.cells) {
+        const p0 = gridToPhoto(c, r);
+        const p1 = gridToPhoto(c + 1, r);
+        const p2 = gridToPhoto(c + 1, r - 1);
+        const p3 = gridToPhoto(c, r - 1);
 
-      // Label
-      const label = getCellLabel(c, r);
-      ctx.fillStyle = isDateCell ? '#d63384' : '#6c757d';
-      ctx.font = isDateCell ? 'bold 13px system-ui' : '11px system-ui';
+        ctx.beginPath();
+        // Top edge (no neighbor above = r+1)
+        if (!cellSet.has(`${c},${r+1}`)) { ctx.moveTo(p0[0], p0[1]); ctx.lineTo(p1[0], p1[1]); }
+        // Bottom edge (no neighbor below = r-1)
+        if (!cellSet.has(`${c},${r-1}`)) { ctx.moveTo(p3[0], p3[1]); ctx.lineTo(p2[0], p2[1]); }
+        // Left edge (no neighbor left = c-1)
+        if (!cellSet.has(`${c-1},${r}`)) { ctx.moveTo(p0[0], p0[1]); ctx.lineTo(p3[0], p3[1]); }
+        // Right edge (no neighbor right = c+1)
+        if (!cellSet.has(`${c+1},${r}`)) { ctx.moveTo(p1[0], p1[1]); ctx.lineTo(p2[0], p2[1]); }
+        ctx.stroke();
+      }
+
+      // Label piece name at centroid
+      const cx = placement.cells.reduce((s, [c]) => s + c, 0) / placement.cells.length;
+      const cr = placement.cells.reduce((s, [, r]) => s + r, 0) / placement.cells.length;
+      const center = gridToPhoto(cx + 0.5, cr + 0.5);
+      ctx.fillStyle = '#fff';
+      ctx.font = 'bold 14px system-ui';
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
-      ctx.fillText(label, x + cellPx / 2, y + cellPx / 2);
-    }
-
-    // Draw solution pieces on top
-    if (solution) {
-      for (const placement of solution) {
-        ctx.fillStyle = placement.color + 'cc';
-        for (const [c, r] of placement.cells) {
-          const x = offsetX + c * cellPx;
-          const y = offsetY + (BOARD_ROWS - 1 - r) * cellPx;
-          ctx.beginPath();
-          ctx.roundRect(x + p, y + p, cellPx - p * 2, cellPx - p * 2, 4);
-          ctx.fill();
-        }
-
-        // Piece borders
-        ctx.strokeStyle = placement.color;
-        ctx.lineWidth = 2;
-        const cellSet = new Set(placement.cells.map(([c, r]) => `${c},${r}`));
-        for (const [c, r] of placement.cells) {
-          const x = offsetX + c * cellPx;
-          const y = offsetY + (BOARD_ROWS - 1 - r) * cellPx;
-          if (!cellSet.has(`${c},${r+1}`)) { ctx.beginPath(); ctx.moveTo(x+p,y+p); ctx.lineTo(x+cellPx-p,y+p); ctx.stroke(); }
-          if (!cellSet.has(`${c},${r-1}`)) { ctx.beginPath(); ctx.moveTo(x+p,y+cellPx-p); ctx.lineTo(x+cellPx-p,y+cellPx-p); ctx.stroke(); }
-          if (!cellSet.has(`${c-1},${r}`)) { ctx.beginPath(); ctx.moveTo(x+p,y+p); ctx.lineTo(x+p,y+cellPx-p); ctx.stroke(); }
-          if (!cellSet.has(`${c+1},${r}`)) { ctx.beginPath(); ctx.moveTo(x+cellPx-p,y+p); ctx.lineTo(x+cellPx-p,y+cellPx-p); ctx.stroke(); }
-        }
-      }
+      ctx.fillText(placement.name, center[0], center[1]);
     }
   }
 

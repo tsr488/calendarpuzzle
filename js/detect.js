@@ -34,11 +34,27 @@ export function detectBoard(photoCanvas) {
     const warpH = BOARD_ROWS * cellPx;
     const warped = warpToGrid(src, corners, warpW, warpH);
 
-    classifyCells(warped, cellPx, result);
+    // Gather per-cell color stats (reusable across threshold attempts)
+    const cellStats = gatherCellStats(warped, cellPx);
+    result.cellStats = cellStats;
+
+    // Classify with default largest-gap threshold
+    classifyCellsFromStats(cellStats, result);
     warped.delete();
   } finally {
     src.delete();
   }
+  return result;
+}
+
+/**
+ * Re-classify cells with an adjusted threshold offset.
+ * Positive offset = more cells classified as pieces, negative = fewer.
+ * Returns a new result object (occupied/empty/cellScores/cellDebug).
+ */
+export function reclassifyWithOffset(cellStats, offset) {
+  const result = { occupied: new Set(), empty: new Set() };
+  classifyCellsFromStats(cellStats, result, offset);
   return result;
 }
 
@@ -161,12 +177,10 @@ function warpToGrid(src, corners, dstW, dstH) {
 }
 
 /**
- * Classify cells as occupied (piece) or empty (wood).
- * 
- * The puzzle has BLUE pieces on LIGHT WOOD.
- * Returns per-cell confidence scores so the solver can try flipping borderline cells.
+ * Gather per-cell color stats from the warped image. 
+ * This is the expensive OpenCV part — done once, reused for threshold adjustments.
  */
-function classifyCells(warped, cellPx, result) {
+function gatherCellStats(warped, cellPx) {
   const hsv = new cv.Mat();
   const rgb = new cv.Mat();
   cv.cvtColor(warped, rgb, cv.COLOR_RGBA2RGB);
@@ -183,7 +197,6 @@ function classifyCells(warped, cellPx, result) {
     const hsvRoi = hsv.roi(roi);
     const rgbRoi = rgb.roi(roi);
 
-    // HSV channels
     const hsvChannels = new cv.MatVector();
     cv.split(hsvRoi, hsvChannels);
     const hMean = new cv.Mat(), hStd = new cv.Mat();
@@ -191,7 +204,6 @@ function classifyCells(warped, cellPx, result) {
     cv.meanStdDev(hsvChannels.get(0), hMean, hStd);
     cv.meanStdDev(hsvChannels.get(1), sMean, sStd);
 
-    // RGB channels — blue ratio is the key signal
     const rgbChannels = new cv.MatVector();
     cv.split(rgbRoi, rgbChannels);
     const rMean = new cv.Mat(), gMean = new cv.Mat(), bMean = new cv.Mat();
@@ -203,16 +215,16 @@ function classifyCells(warped, cellPx, result) {
     const R = rMean.doubleAt(0, 0);
     const G = gMean.doubleAt(0, 0);
     const B = bMean.doubleAt(0, 0);
-    const total = R + G + B + 1; // +1 to avoid div by zero
+    const total = R + G + B + 1;
 
     cellStats.push({
       col: c, row: r,
       hue: hMean.doubleAt(0, 0),
       sat: sMean.doubleAt(0, 0),
       R, G, B,
-      blueRatio: B / total,       // high for blue pieces
-      warmRatio: R / total,        // high for wood
-      blueDominance: B - R,        // positive = blue piece, negative = wood
+      blueRatio: B / total,
+      warmRatio: R / total,
+      blueDominance: B - R,
     });
 
     hsvRoi.delete(); rgbRoi.delete();
@@ -222,42 +234,39 @@ function classifyCells(warped, cellPx, result) {
     rMean.delete(); gMean.delete(); bMean.delete(); rStd.delete(); gStd.delete(); bStd.delete();
   }
 
-  // Use blue dominance (B - R) as primary signal with Otsu split
+  hsv.delete(); rgb.delete();
+  return cellStats;
+}
+
+/**
+ * Classify cells from pre-gathered stats. Pure math — no OpenCV needed.
+ * @param {object[]} cellStats - from gatherCellStats
+ * @param {object} result - will be populated with occupied/empty/cellScores/cellDebug
+ * @param {number} thresholdOffset - shift threshold (positive = more pieces, negative = fewer)
+ */
+function classifyCellsFromStats(cellStats, result, thresholdOffset = 0) {
   const blueDoms = cellStats.map(s => s.blueDominance);
   const blueThreshold = findOtsuThreshold(blueDoms);
-
-  // Also compute saturation threshold as secondary signal
   const sats = cellStats.map(s => s.sat);
   const satThreshold = findOtsuThreshold(sats);
 
   result.cellScores = [];
-  result.cellDebug = []; // detailed per-cell debug info
+  result.cellDebug = [];
 
-  // First pass: compute raw scores
   const rawScores = [];
   for (const stats of cellStats) {
-    // Primary: blue dominance (B - R) relative to threshold
     const blueScore = (stats.blueDominance - blueThreshold) / 40;
-    // Secondary: saturation
     const satScore = (stats.sat - Math.max(satThreshold, 25)) / 50;
-    // Blue hue confirmation
     const hueBonus = (stats.hue > 80 && stats.hue < 140) ? 0.3 : -0.2;
-
-    const score = blueScore * 0.6 + satScore * 0.3 + hueBonus * 0.1;
-    rawScores.push(score);
+    rawScores.push(blueScore * 0.6 + satScore * 0.3 + hueBonus * 0.1);
   }
 
-  // Adaptive threshold on the composite scores using largest-gap method
-  // With few piece cells vs many wood cells, Otsu gets pulled wrong.
-  // Largest gap finds the natural break between the two clusters.
-  const scoreThreshold = findLargestGapThreshold(rawScores);
+  const scoreThreshold = findLargestGapThreshold(rawScores) + thresholdOffset;
 
   for (let i = 0; i < cellStats.length; i++) {
     const stats = cellStats[i];
     const key = cellKey(stats.col, stats.row);
     const score = rawScores[i];
-
-    // Classify relative to Otsu threshold of scores (not fixed 0)
     const isOccupied = score > scoreThreshold;
 
     result.cellScores.push({ col: stats.col, row: stats.row, score: score - scoreThreshold, key });
@@ -277,10 +286,7 @@ function classifyCells(warped, cellPx, result) {
     }
   }
 
-  // Sort by absolute score so borderline cells come first
   result.cellScores.sort((a, b) => Math.abs(a.score) - Math.abs(b.score));
-
-  hsv.delete(); rgb.delete();
 }
 
 function findOtsuThreshold(values) {
