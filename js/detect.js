@@ -432,12 +432,6 @@ export function drawDebug(debugCanvas, photoCanvas, corners, occupied, empty, ce
     const thr = cellDebug[0]?.thr || '?';
     ctx.fillText(`occ:${occupied.size} empty:${empty.size} thr:${thr}`, 10, 14);
 
-    // Title
-    ctx.fillStyle = '#fff';
-    ctx.font = 'bold 12px monospace';
-    const thr = cellDebug[0]?.thr || '?';
-    ctx.fillText(`occ:${occupied.size} empty:${empty.size} thr:${thr}`, 10, 14);
-
     for (const cd of cellDebug) {
       const gx = 10 + cd.col * cellW;
       const gy = 20 + (BOARD_ROWS - 1 - cd.row) * cellH;
