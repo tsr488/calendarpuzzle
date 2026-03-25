@@ -274,10 +274,6 @@ function classifyCells(warped, cellPx, result) {
       result.empty.add(key);
     }
   }
-    } else {
-      result.empty.add(key);
-    }
-  }
 
   // Sort by absolute score so borderline cells come first
   result.cellScores.sort((a, b) => Math.abs(a.score) - Math.abs(b.score));
