@@ -254,7 +254,7 @@ class App {
           this.statusEl.textContent = `Solved! ${solution.length} pieces to place. Tap 💡 Hint`;
         }
       } else {
-        this.statusEl.textContent = 'No solution. Tap cells to fix.';
+        this.statusEl.textContent = 'No solution. Tap cells to fix, or retake pic.';
       }
     } catch (err) {
       console.error('Detection error:', err);
@@ -538,7 +538,7 @@ class App {
         this._solution = null;
         this._hintIndex = 0;
         this.hintBtn.classList.add('hidden');
-        this.statusEl.textContent = 'No solution. Tap cells to fix.';
+        this.statusEl.textContent = 'No solution. Tap cells to fix, or retake pic.';
       }
     }, 20);
   }
