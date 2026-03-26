@@ -13,12 +13,12 @@ body {
   font-family: -apple-system, BlinkMacSystemFont, 'SF Pro', system-ui, sans-serif;
   background: var(--bg);
   color: var(--text);
-  height: 100dvh;
   height: 100vh; /* fallback */
+  height: 100dvh;
   display: flex;
   flex-direction: column;
   align-items: center;
-  padding: 10px 16px;
+  padding: 10px 16px calc(10px + env(safe-area-inset-bottom, 0px));
   overflow: hidden;
   -webkit-user-select: none;
   user-select: none;
